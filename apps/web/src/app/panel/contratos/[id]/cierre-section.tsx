@@ -1,0 +1,257 @@
+"use client";
+
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import {
+  XCircle, Loader2, CheckCircle2, ShieldCheck, AlertTriangle,
+} from "lucide-react";
+import { terminarContrato } from "./actions";
+import { clp } from "@/lib/format";
+import { useToast } from "@/components/ui/toast";
+
+interface Props {
+  contratoId:          string;
+  multaMeses:          number;
+  valorArriendo:       number;
+  denominacion:        string;  // "CLP" | "UF"
+  /** Monto de garantía disponible HOY (ya revalorizado a la UF del día si la
+   * garantía se pactó en UF). Es el máximo que el corredor puede retener o
+   * devolver, y lo que terminarContrato liquidará. */
+  garantiaDisponibleCLP: number;
+  /** Denominación de la garantía ("UF" | "CLP" | null) — para avisar cuando el
+   * monto mostrado viene revalorizado y no coincide con lo depositado. */
+  garantiaDenominacion?: string | null;
+  garantiaMontoBase?:    number | null;
+  permitirTerminoNormal?: boolean;  // false = solo disponible en el último mes
+}
+
+export function CierreSection({
+  contratoId,
+  multaMeses,
+  valorArriendo,
+  denominacion,
+  garantiaDisponibleCLP,
+  garantiaDenominacion,
+  garantiaMontoBase,
+  permitirTerminoNormal = true,
+}: Props) {
+  const router = useRouter();
+  const { show: toast }              = useToast();
+  const [isPending, startTransition] = useTransition();
+  const [confirmado, setConfirmado]       = useState(false);
+  const [tipo, setTipo]                   = useState<"normal" | "anticipado">(() =>
+    permitirTerminoNormal ? "normal" : "anticipado"
+  );
+  const [montoRetencion, setMontoRetencion] = useState(0);
+
+  /* Multa estimada (solo para UF usamos el valor nominal × UF, aquí lo mostramos
+     en la misma denominación del contrato como referencia informativa) */
+  const multaDisplay = multaMeses > 0
+    ? denominacion === "UF"
+      ? `${multaMeses * valorArriendo} UF aprox.`
+      : clp(multaMeses * valorArriendo)
+    : null;
+
+  function handleTerminar() {
+    if (!confirmado) return;
+    startTransition(async () => {
+      const res = await terminarContrato(contratoId, { tipo, montoRetencion });
+      if (!res.ok) {
+        toast(res.error ?? "Error al terminar el contrato.", "error");
+        return;
+      }
+      const label = tipo === "anticipado" ? "término anticipado" : "término";
+      toast(`Contrato dado de ${label}. La propiedad volvió a disponible.`, "success");
+      router.refresh();
+    });
+  }
+
+  return (
+    <div
+      className="mb-6 overflow-hidden rounded-2xl border-2"
+      style={{ borderColor: "var(--hw-danger-bd)", background: "var(--hw-danger-lt)" }}
+    >
+      {/* Header */}
+      <div
+        className="flex items-center gap-3 px-5 py-4"
+        style={{ background: "var(--hw-danger-lt)", borderBottom: "1px solid var(--hw-danger-bd)" }}
+      >
+        <XCircle className="h-5 w-5 shrink-0" style={{ color: "var(--hw-danger-dk)" }} aria-hidden="true" />
+        <div>
+          <p className="font-semibold" style={{ color: "var(--hw-danger-dk)" }}>
+            Dar término al contrato
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--hw-danger-dk)" }}>
+            La propiedad volverá al estado <strong>disponible</strong> y podrá ser rearrendada.
+          </p>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="px-5 py-4 space-y-5">
+
+        {/* Tipo de término */}
+        <fieldset>
+          <legend className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--hw-danger-dk)" }}>
+            Tipo de término
+          </legend>
+          <div className="grid grid-cols-2 gap-2">
+            {(["normal", "anticipado"] as const).map((t) => {
+              const active   = tipo === t;
+              const disabled = t === "normal" && !permitirTerminoNormal;
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => !disabled && setTipo(t)}
+                  aria-pressed={active}
+                  disabled={disabled}
+                  title={disabled ? "Disponible solo durante el último mes del contrato" : undefined}
+                  className="hw-btn rounded-xl py-3 px-4 text-sm font-semibold text-left"
+                  style={{
+                    background: disabled ? "var(--hw-surface-2)" : active ? "var(--hw-danger-lt)" : "var(--hw-surface)",
+                    border:     `2px solid ${disabled ? "var(--hw-border)" : active ? "var(--hw-danger)" : "var(--hw-danger-bd)"}`,
+                    color:      disabled ? "var(--hw-text-4)" : active ? "var(--hw-danger-dk)" : "var(--hw-danger-dk)",
+                    cursor:     disabled ? "not-allowed" : "pointer",
+                  }}
+                >
+                  <p className="font-semibold">
+                    {t === "normal" ? "Término normal" : "Término anticipado"}
+                  </p>
+                  <p className="text-xs font-normal mt-0.5 opacity-80">
+                    {t === "normal"
+                      ? disabled
+                        ? "Disponible a ≤ 1 mes del vencimiento"
+                        : "Vencimiento natural o preaviso cumplido"
+                      : "El arrendatario se va antes del plazo pactado"}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        {/* Aviso multa (solo anticipado y si hay multa) */}
+        {tipo === "anticipado" && multaDisplay && (
+          <div
+            className="flex items-start gap-3 rounded-xl px-4 py-3"
+            style={{ background: "var(--hw-warning-lt)", border: "1px solid var(--hw-warning-bd)" }}
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" style={{ color: "var(--hw-warning-dk)" }} aria-hidden="true" />
+            <div className="text-xs" style={{ color: "var(--hw-warning-dk)" }}>
+              <p className="font-semibold">Multa por término anticipado (informativa)</p>
+              <p className="mt-0.5">
+                Según el contrato ({multaMeses} mes(es) de multa): <strong>{multaDisplay}</strong>.
+                El cobro de la multa se gestiona fuera del sistema.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Garantía — retención / devolución */}
+        {garantiaDisponibleCLP > 0 && (
+          <div className="rounded-xl p-4 space-y-3" style={{ background: "var(--hw-surface)", border: "1px solid var(--hw-danger-bd)" }}>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 shrink-0" style={{ color: "var(--hw-danger-dk)" }} aria-hidden="true" />
+              <p className="text-sm font-semibold" style={{ color: "var(--hw-danger-dk)" }}>
+                Garantía a restituir: {clp(garantiaDisponibleCLP)}
+              </p>
+            </div>
+            {garantiaDenominacion === "UF" && garantiaMontoBase != null && (
+              <p className="text-[11px]" style={{ color: "var(--hw-danger-dk)", opacity: 0.85 }}>
+                Pactada en {garantiaMontoBase} UF — monto revalorizado a la UF de hoy.
+              </p>
+            )}
+
+            <div>
+              <label
+                htmlFor="monto-retencion"
+                className="mb-1 block text-xs font-semibold"
+                style={{ color: "var(--hw-danger-dk)" }}
+              >
+                Monto a retener por daños (0 = devuelve todo)
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium" style={{ color: "var(--hw-danger-dk)" }}>$</span>
+                <input
+                  id="monto-retencion"
+                  type="number"
+                  min={0}
+                  max={garantiaDisponibleCLP}
+                  step={1000}
+                  value={montoRetencion}
+                  onChange={(e) => setMontoRetencion(Math.min(garantiaDisponibleCLP, Math.max(0, Number(e.target.value))))}
+                  className="w-40 rounded-lg border px-3 py-1.5 text-sm tabular-nums"
+                  style={{ borderColor: "var(--hw-danger-bd)", color: "var(--hw-danger-dk)", outline: "none" }}
+                />
+              </div>
+            </div>
+
+            {/* Resumen visual */}
+            <div className="grid grid-cols-2 gap-2 rounded-lg p-3" style={{ background: "var(--hw-danger-lt)" }}>
+              <div className="text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--hw-danger-dk)" }}>
+                  Se retiene
+                </p>
+                <p className="mt-0.5 text-sm font-bold tabular-nums" style={{ color: "var(--hw-danger-dk)" }}>
+                  {clp(montoRetencion)}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--hw-success)" }}>
+                  Se devuelve
+                </p>
+                <p className="mt-0.5 text-sm font-bold tabular-nums" style={{ color: "var(--hw-success-dk)" }}>
+                  {clp(garantiaDisponibleCLP - montoRetencion)}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[11px]" style={{ color: "var(--hw-danger-dk)", opacity: 0.8 }}>
+              Ambos montos quedarán registrados en el ledger inmutable del contrato (Ley 18.101 · tope legal 2 rentas).
+            </p>
+          </div>
+        )}
+
+        {/* Confirmación */}
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            checked={confirmado}
+            onChange={(e) => setConfirmado(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded accent-red-600"
+          />
+          <span className="text-xs font-medium" style={{ color: "var(--hw-danger-dk)" }}>
+            Confirmo que deseo dar{" "}
+            {tipo === "anticipado" ? "término anticipado" : "término"} a este contrato.
+            Esta acción <strong>no se puede revertir</strong>.
+          </span>
+        </label>
+
+        <button
+          type="button"
+          onClick={handleTerminar}
+          disabled={!confirmado || isPending}
+          className="hw-btn flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold text-white"
+          style={{
+            background: (!confirmado || isPending) ? "var(--hw-border-2)" : "var(--hw-danger)",
+            cursor: !confirmado ? "not-allowed" : "pointer",
+          }}
+        >
+          {isPending ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              Terminando contrato…
+            </>
+          ) : (
+            <>
+              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+              Confirmar{" "}
+              {tipo === "anticipado" ? "término anticipado" : "término de contrato"}
+            </>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}

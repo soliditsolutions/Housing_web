@@ -1,0 +1,831 @@
+// Housing — esquema de datos del MVP.
+// Traducción de docs/04-esquema-bd.md. RLS, triggers (ledger inmutable),
+// índice único parcial y vistas de saldos se aplican por SQL aparte
+// (prisma/sql/setup.sql), porque Prisma no los modela en el schema.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────── Enums ─────────────────────────
+
+enum RolUsuario {
+  admin
+  operador
+}
+
+enum TipoPropiedad {
+  casa
+  departamento
+  cabana
+}
+
+enum EstadoPropiedad {
+  borrador      // Recién creada, pendiente de confirmación por el corredor
+  disponible
+  reservada
+  arrendada
+}
+
+enum Denominacion {
+  UF
+  CLP
+}
+
+enum FrecuenciaReajuste {
+  anual
+  semestral
+  ninguna
+}
+
+enum EstadoContrato {
+  borrador
+  vigente
+  terminado
+  terminado_anticipado
+  cancelado            // Borrador anulado antes de activarse — nunca estuvo vigente
+}
+
+enum EstadoPeriodo {
+  pendiente
+  pagado
+  liquidado
+  atrasado
+  en_revision
+  cancelado     // Período futuro anulado al terminar o cancelar el contrato
+}
+
+enum EstadoPublicacion {
+  borrador
+  publicada
+  bajada
+}
+
+enum EstadoReserva {
+  activa
+  cancelada
+  convertida
+}
+
+enum EstadoPago {
+  en_revision
+  conciliado
+  anulado
+}
+
+enum CanalPago {
+  PAC
+  pago_facil
+  transferencia_declarada
+  otro
+}
+
+enum TipoConcepto {
+  arriendo
+  gasto_comun
+  interes
+  multa
+  ajuste
+  garantia
+}
+
+enum TipoAjuste {
+  descuento_propietario
+  cargo_arrendatario
+  retencion
+}
+
+enum TipoVoucher {
+  pago
+  liquidacion
+}
+
+enum TipoAsiento {
+  CARGO_ARRIENDO
+  CARGO_GASTO_COMUN
+  CARGO_INTERES
+  CARGO_MULTA
+  CARGO_AJUSTE
+  PAGO_RECIBIDO
+  COMISION_CORREDOR
+  AJUSTE_LIQUIDACION
+  LIQUIDACION_PROPIETARIO
+  GARANTIA_RECIBIDA
+  RETENCION_GARANTIA
+  DEVOLUCION_GARANTIA
+  // Reajuste UF de la garantía al cierre. Cuando la garantía se pactó en UF,
+  // el monto a restituir se revaloriza a la UF del día de término (práctica
+  // legal chilena). La diferencia contra lo recibido (que quedó registrado en
+  // GARANTIA_RECIBIDA a la UF del día de recepción) es este asiento — positivo
+  // si la UF subió (lo aporta el propietario), negativo si bajó. Sin él, la
+  // vista v_garantia_retenida no cerraría a cero al liquidar una garantía UF.
+  REAJUSTE_GARANTIA
+}
+
+enum TipoNotificacion {
+  cobro
+  voucher_pago
+  recordatorio_vencimiento
+  liquidacion_propietario
+  salida_anticipada
+  termino_contrato
+  nuevo_contrato
+  solicitud_firma
+  renovacion_contrato    // Notificación al arrendatario cuando se renueva el contrato
+  comentario_corredor    // Corredor deja un comentario/mensaje en el portal del arrendatario
+}
+
+enum CanalNotificacion {
+  email
+}
+
+enum EstadoNotificacion {
+  pendiente
+  simulada
+  enviada
+}
+
+enum TipoDocumento {
+  contrato
+  anexo
+  comprobante_pago
+  certificado_reserva
+  reconocimiento_deuda
+  otro
+}
+
+enum CanalOtp {
+  email
+  sms
+}
+
+// ───────────────────────── Modelos ─────────────────────────
+
+model Tenant {
+  id                      String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nombre                  String
+  rut                     String?
+  plan                    String?
+  emailContacto           String?  @map("email_contacto")   // email público para recibir consultas del marketplace
+  // Config operativa (ADR-0008)
+  ventanaLiquidacionDias  Int      @default(10) @map("ventana_liquidacion_dias") @db.SmallInt
+  recordatorioDiasAntes   Int      @default(5)  @map("recordatorio_dias_antes")  @db.SmallInt
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  usuarios         Usuario[]
+  personas         Persona[]
+  propiedades      Propiedad[]
+  imagenes         ImagenPropiedad[]
+  publicaciones    Publicacion[]
+  reservas         Reserva[]
+  contratos        Contrato[]
+  periodos         PeriodoPago[]
+  ajustes          AjusteLiquidacion[]
+  pagos            PagoEntrante[]
+  asientos         AsientoLedger[]
+  vouchers         Voucher[]
+  notificaciones   Notificacion[]
+  documentos       Documento[]
+  accesosOtp       AccesoOtp[]
+  accesosLog       AccesoLog[]
+  consultasContacto ConsultaContacto[]
+  valoraciones     ValoracionCorredor[]
+  comentarios      ComentarioCorredor[]
+
+  @@map("tenant")
+}
+
+// Solo corredores (staff de la corredora).
+model Usuario {
+  id              String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String     @map("tenant_id") @db.Uuid
+  rol             RolUsuario @default(operador)
+  nombre          String
+  email           String
+  rut             String?    // RUT chileno canónico sin puntos: "12345678-9" — unique global
+  telefono        String?
+  // Perfil del corredor — obligatorio para usar el panel
+  fechaNacimiento DateTime?  @map("fecha_nacimiento")   @db.Date
+  direccion       String?
+  ciudad          String?
+  region          String?
+  fotoPerfil      String?    @map("foto_perfil")
+  perfilCompleto  Boolean    @default(false) @map("perfil_completo")
+  passwordHash    String?    @map("password_hash")      // PBKDF2-SHA256 (nullable = cuenta sin contraseña)
+  failedAttempts  Int        @default(0) @map("failed_attempts")
+  lockedUntil     DateTime?  @map("locked_until")       @db.Timestamptz(6)
+  lastLoginAt     DateTime?  @map("last_login_at")      @db.Timestamptz(6)
+  // Ley 21.719 — consentimiento explícito e inequívoco (Art. 4)
+  consentGivenAt  DateTime?  @map("consent_given_at")   @db.Timestamptz(6)
+  consentVersion  String?    @map("consent_version")    // ej. "tys-v1.0"
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant           Tenant              @relation(fields: [tenantId], references: [id])
+  pagosDeclarados  PagoEntrante[]      @relation("PagoDeclaradoPor")
+  pagosConfirmados PagoEntrante[]      @relation("PagoConfirmadoPor")
+  ajustesCreados   AjusteLiquidacion[] @relation("AjusteCreadoPor")
+  resetTokens              ResetToken[]
+  dispositivosConfiables   DispositivoConfiable[]
+  codigosDispositivo       CodigoDispositivo[]
+
+  @@index([tenantId])
+  @@unique([rut])
+  @@map("usuario")
+}
+
+// Propietarios y arrendatarios (sin cuenta). Acceden por portal OTP.
+model Persona {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  rut             String
+  nombre          String
+  email           String?
+  telefono        String?
+  canalAccesoPref CanalOtp? @map("canal_acceso_pref")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant                Tenant          @relation(fields: [tenantId], references: [id])
+  propiedades           Propiedad[]
+  contratosArrendatario Contrato[]      @relation("ContratoArrendatario")
+  contratosPropietario  Contrato[]      @relation("ContratoPropietario")
+  asientosArrendatario  AsientoLedger[] @relation("AsientoArrendatario")
+  asientosPropietario   AsientoLedger[] @relation("AsientoPropietario")
+  vouchers              Voucher[]
+  reservas              Reserva[]
+  notificaciones        Notificacion[]
+  accesosOtp            AccesoOtp[]
+  accesosLog            AccesoLog[]
+
+  @@index([tenantId])
+  @@unique([tenantId, rut])
+  @@map("persona")
+}
+
+model Propiedad {
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId           String          @map("tenant_id") @db.Uuid
+  propietarioId      String          @map("propietario_id") @db.Uuid
+  tipo               TipoPropiedad
+  estado             EstadoPropiedad @default(borrador)
+  direccion          String
+  comuna             String?
+  region             String?
+  orientacion        String?
+  antiguedadAnios    Int?            @map("antiguedad_anios")
+  m2Construidos      Decimal?        @map("m2_construidos") @db.Decimal(8, 2)
+  m2Totales          Decimal?        @map("m2_totales") @db.Decimal(8, 2)
+  esCondominio       Boolean         @default(false) @map("es_condominio")
+  plantas            Int?            @db.SmallInt
+  piezas             Int?            @db.SmallInt
+  banos              Int?            @db.SmallInt
+  estacionamientos   Int?            @db.SmallInt
+  pagaGastosComunes  Boolean         @default(false) @map("paga_gastos_comunes")
+  valorGastosComunes Decimal?        @map("valor_gastos_comunes") @db.Decimal(14, 0)
+  aceptaMascotas     Boolean         @default(false) @map("acepta_mascotas")
+  otrasDescripciones String?         @map("otras_descripciones")
+  latitud            Decimal?        @db.Decimal(9, 6)
+  longitud           Decimal?        @db.Decimal(9, 6)
+  mostrarUbicacionExacta Boolean     @default(false) @map("mostrar_ubicacion_exacta")
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant        Tenant            @relation(fields: [tenantId], references: [id])
+  propietario   Persona           @relation(fields: [propietarioId], references: [id])
+  imagenes      ImagenPropiedad[]
+  publicaciones Publicacion[]
+  reservas      Reserva[]
+  contratos     Contrato[]
+  documentos    Documento[]
+  accesosOtp    AccesoOtp[]
+
+  @@index([tenantId])
+  @@map("propiedad")
+}
+
+model ImagenPropiedad {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  propiedadId String   @map("propiedad_id") @db.Uuid
+  url         String
+  orden       Int      @default(0) @db.SmallInt
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  propiedad Propiedad @relation(fields: [propiedadId], references: [id], onDelete: Cascade)
+
+  @@map("imagen_propiedad")
+}
+
+model Publicacion {
+  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId           String            @map("tenant_id") @db.Uuid
+  propiedadId        String            @map("propiedad_id") @db.Uuid
+  estado             EstadoPublicacion @default(borrador)
+  titulo             String
+  descripcion        String?
+  precioReferencia   Decimal?          @map("precio_referencia") @db.Decimal(14, 4)
+  denominacionPrecio Denominacion?     @map("denominacion_precio")
+  publicadaEn        DateTime?         @map("publicada_en") @db.Timestamptz(6)
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  propiedad Propiedad @relation(fields: [propiedadId], references: [id])
+  consultas ConsultaContacto[]
+  denuncias Denuncia[]
+
+  @@map("publicacion")
+}
+
+model Reserva {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  propiedadId  String        @map("propiedad_id") @db.Uuid
+  personaId    String?       @map("persona_id") @db.Uuid
+  fechaReserva DateTime      @default(now()) @map("fecha_reserva") @db.Date
+  vigenteHasta DateTime?     @map("vigente_hasta") @db.Date
+  estado       EstadoReserva @default(activa)
+  notas        String?
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  propiedad  Propiedad   @relation(fields: [propiedadId], references: [id])
+  persona    Persona?    @relation(fields: [personaId], references: [id])
+  documentos Documento[]
+
+  @@map("reserva")
+}
+
+model Contrato {
+  id                  String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String             @map("tenant_id") @db.Uuid
+  propiedadId         String             @map("propiedad_id") @db.Uuid
+  arrendatarioId      String             @map("arrendatario_id") @db.Uuid
+  propietarioId       String             @map("propietario_id") @db.Uuid
+  estado              EstadoContrato     @default(borrador)
+  denominacion        Denominacion
+  valorArriendo       Decimal            @map("valor_arriendo") @db.Decimal(14, 4)
+  diaVencimiento      Int                @map("dia_vencimiento") @db.SmallInt
+  comisionCorredorPct Decimal            @default(0) @map("comision_corredor_pct") @db.Decimal(5, 2)
+  reajuste            FrecuenciaReajuste @default(anual)
+  moraTasaPct         Decimal            @default(0) @map("mora_tasa_pct") @db.Decimal(5, 2)
+  moraDiasGracia      Int                @default(0) @map("mora_dias_gracia") @db.SmallInt
+  multaMeses          Decimal            @default(0) @map("multa_meses") @db.Decimal(4, 2)
+  cobraGastoComun     Boolean            @default(false) @map("cobra_gasto_comun")
+  // Garantía (ADR-0009) — tope legal 2 rentas.
+  //  · garantiaMeses:     nº de rentas pactadas como garantía (0–2), tope legal.
+  //  · garantiaDenominacion + garantiaMontoBase: el monto PACTADO en su unidad
+  //    (2 UF, o $760.000). Análogo a denominacion + valorArriendo del arriendo.
+  //  · garantiaMontoCLP:  SNAPSHOT en pesos de lo recibido, a la UF del día de
+  //    inicio. Es lo que registra el asiento GARANTIA_RECIBIDA (inmutable). Para
+  //    garantía CLP coincide con el monto base; para UF es el equivalente del día.
+  //    La devolución revaloriza montoBase a la UF del día de término (ver
+  //    REAJUSTE_GARANTIA), no este snapshot.
+  //  garantiaDenominacion/garantiaMontoBase son opcionales: contratos previos a
+  //  esta migración solo tienen el CLP; el backfill los completa como CLP fijo.
+  garantiaMeses        Decimal            @default(0) @map("garantia_meses") @db.Decimal(3, 1)
+  garantiaDenominacion Denominacion?      @map("garantia_denominacion")
+  garantiaMontoBase    Decimal?           @map("garantia_monto_base") @db.Decimal(14, 4)
+  garantiaMontoCLP     Decimal            @default(0) @map("garantia_monto_clp") @db.Decimal(14, 0)
+  fechaInicio         DateTime           @map("fecha_inicio") @db.Date
+  fechaFin            DateTime?          @map("fecha_fin") @db.Date
+  fechaTermino        DateTime?          @map("fecha_termino") @db.Date  // Fecha real en que se terminó/canceló
+  // Validación IA — resultado de la última validación automática
+  validacionIa           Json?     @map("validacion_ia")
+  validacionEstado       String?   @map("validacion_estado")     // "aprobado" | "con_alertas" | "requiere_revision"
+  validacionAt           DateTime? @map("validacion_at")         @db.Timestamptz(6)
+  validacionConfirmadaAt DateTime? @map("validacion_confirmada_at") @db.Timestamptz(6) // corredor confirmó a pesar de alertas
+  tokenValoracion     String?            @unique @map("token_valoracion") @db.Uuid
+  valoracionDada      Boolean            @default(false) @map("valoracion_dada")
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  propiedad      Propiedad       @relation(fields: [propiedadId], references: [id])
+  arrendatario   Persona         @relation("ContratoArrendatario", fields: [arrendatarioId], references: [id])
+  propietario    Persona         @relation("ContratoPropietario", fields: [propietarioId], references: [id])
+  periodos       PeriodoPago[]
+  pagos          PagoEntrante[]
+  asientos       AsientoLedger[]
+  vouchers       Voucher[]
+  notificaciones Notificacion[]
+  documentos     Documento[]
+  valoracion     ValoracionCorredor?
+  comentarios    ComentarioCorredor[]
+
+  @@index([tenantId])
+  @@map("contrato")
+}
+
+model PeriodoPago {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String        @map("tenant_id") @db.Uuid
+  contratoId       String        @map("contrato_id") @db.Uuid
+  numero           Int
+  fechaInicio      DateTime      @map("fecha_inicio") @db.Date
+  fechaVencimiento DateTime      @map("fecha_vencimiento") @db.Date
+  montoBase        Decimal       @map("monto_base") @db.Decimal(14, 4)
+  montoGastoComun  Decimal       @default(0) @map("monto_gasto_comun") @db.Decimal(14, 0)
+  estado           EstadoPeriodo @default(pendiente)
+  fechaPagoReal    DateTime?     @map("fecha_pago_real") @db.Date
+
+  tenant     Tenant          @relation(fields: [tenantId], references: [id])
+  contrato   Contrato        @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  pagos      PagoEntrante[]
+  asientos   AsientoLedger[]
+  vouchers   Voucher[]
+  documentos Documento[]
+
+  ajustes    AjusteLiquidacion[]
+
+  @@unique([contratoId, numero])
+  @@index([tenantId])
+  @@map("periodo_pago")
+}
+
+// Ajustes que el corredor agrega antes de cerrar la liquidación (ADR-0008).
+// Ej.: descuento por reparación, cargo por daño, retención de garantía.
+model AjusteLiquidacion {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String     @map("tenant_id") @db.Uuid
+  periodoId   String     @map("periodo_id") @db.Uuid
+  tipo        TipoAjuste
+  montoCLP    Decimal    @map("monto_clp") @db.Decimal(14, 0)
+  descripcion String
+  creadoPorId String?    @map("creado_por") @db.Uuid
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant    Tenant      @relation(fields: [tenantId], references: [id])
+  periodo   PeriodoPago @relation(fields: [periodoId], references: [id], onDelete: Cascade)
+  creadoPor Usuario?    @relation("AjusteCreadoPor", fields: [creadoPorId], references: [id])
+
+  @@index([tenantId])
+  @@index([periodoId])
+  @@map("ajuste_liquidacion")
+}
+
+model PagoEntrante {
+  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String     @map("tenant_id") @db.Uuid
+  contratoId        String?    @map("contrato_id") @db.Uuid
+  periodoId         String?    @map("periodo_id") @db.Uuid
+  montoClp          Decimal    @map("monto_clp") @db.Decimal(14, 0)
+  fechaPagoReal     DateTime   @map("fecha_pago_real") @db.Date
+  canal             CanalPago
+  estado            EstadoPago @default(en_revision)
+  comprobanteUrl    String?    @map("comprobante_url")
+  declaracionJurada Boolean    @default(false) @map("declaracion_jurada")
+  declaradoPorId    String?    @map("declarado_por") @db.Uuid
+  confirmadoPorId   String?    @map("confirmado_por") @db.Uuid
+  confirmadoEn      DateTime?  @map("confirmado_en") @db.Timestamptz(6)
+  origen            String     @default("simulado")
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  contrato      Contrato?       @relation(fields: [contratoId], references: [id])
+  periodo       PeriodoPago?    @relation(fields: [periodoId], references: [id])
+  declaradoPor  Usuario?        @relation("PagoDeclaradoPor", fields: [declaradoPorId], references: [id])
+  confirmadoPor Usuario?        @relation("PagoConfirmadoPor", fields: [confirmadoPorId], references: [id])
+  asientos      AsientoLedger[]
+
+  @@map("pago_entrante")
+}
+
+model AsientoLedger {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String        @map("tenant_id") @db.Uuid
+  contratoId     String        @map("contrato_id") @db.Uuid
+  periodoId      String?       @map("periodo_id") @db.Uuid
+  arrendatarioId String        @map("arrendatario_id") @db.Uuid
+  propietarioId  String        @map("propietario_id") @db.Uuid
+  tipo           TipoAsiento
+  concepto       TipoConcepto?
+  signo          Int           @default(1) @db.SmallInt
+  montoClp       Decimal       @map("monto_clp") @db.Decimal(14, 0)
+  monedaOrigen   Denominacion? @map("moneda_origen")
+  valorOrigen    Decimal?      @map("valor_origen") @db.Decimal(14, 4)
+  ufAplicada     Decimal?      @map("uf_aplicada") @db.Decimal(12, 2)
+  fechaEvento    DateTime      @map("fecha_evento") @db.Date
+  descripcion    String?
+  reversaDeId    String?       @map("reversa_de") @db.Uuid
+  pagoId         String?       @map("pago_id") @db.Uuid
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant       Tenant          @relation(fields: [tenantId], references: [id])
+  contrato     Contrato        @relation(fields: [contratoId], references: [id])
+  periodo      PeriodoPago?    @relation(fields: [periodoId], references: [id])
+  arrendatario Persona         @relation("AsientoArrendatario", fields: [arrendatarioId], references: [id])
+  propietario  Persona         @relation("AsientoPropietario", fields: [propietarioId], references: [id])
+  reversaDe    AsientoLedger?  @relation("AsientoReversa", fields: [reversaDeId], references: [id])
+  reversas     AsientoLedger[] @relation("AsientoReversa")
+  pago         PagoEntrante?   @relation(fields: [pagoId], references: [id])
+
+  @@index([tenantId])
+  @@index([contratoId])
+  @@index([periodoId])
+  @@map("asiento_ledger")
+}
+
+model Voucher {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String      @map("tenant_id") @db.Uuid
+  contratoId     String      @map("contrato_id") @db.Uuid
+  periodoId      String?     @map("periodo_id") @db.Uuid
+  arrendatarioId String      @map("arrendatario_id") @db.Uuid
+  tipo           TipoVoucher
+  montoClp       Decimal     @map("monto_clp") @db.Decimal(14, 0)
+  fecha          DateTime    @db.Date
+  snapshot       Json        @db.JsonB
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  contrato     Contrato     @relation(fields: [contratoId], references: [id])
+  periodo      PeriodoPago? @relation(fields: [periodoId], references: [id])
+  arrendatario Persona      @relation(fields: [arrendatarioId], references: [id])
+  documentos   Documento[]
+
+  @@map("voucher")
+}
+
+model Notificacion {
+  id         String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String             @map("tenant_id") @db.Uuid
+  personaId  String             @map("persona_id") @db.Uuid
+  contratoId String?            @map("contrato_id") @db.Uuid
+  tipo       TipoNotificacion
+  canal      CanalNotificacion  @default(email)
+  estado     EstadoNotificacion @default(pendiente)
+  asunto     String
+  cuerpo     String?
+  payload    Json?
+  enviadaEn  DateTime?          @map("enviada_en") @db.Timestamptz(6)
+  createdAt  DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  persona  Persona   @relation(fields: [personaId], references: [id])
+  contrato Contrato? @relation(fields: [contratoId], references: [id])
+
+  @@index([tenantId])
+  @@index([personaId])
+  @@map("notificacion")
+}
+
+model Documento {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  tipo         TipoDocumento
+  contratoId   String?       @map("contrato_id") @db.Uuid
+  propiedadId  String?       @map("propiedad_id") @db.Uuid
+  periodoId    String?       @map("periodo_id") @db.Uuid
+  voucherId    String?       @map("voucher_id") @db.Uuid
+  reservaId    String?       @map("reserva_id") @db.Uuid
+  comentarioId String?       @map("comentario_id") @db.Uuid
+  nombre       String
+  storageKey   String        @map("storage_key")
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant     Tenant               @relation(fields: [tenantId], references: [id])
+  contrato   Contrato?            @relation(fields: [contratoId], references: [id])
+  propiedad  Propiedad?           @relation(fields: [propiedadId], references: [id])
+  periodo    PeriodoPago?         @relation(fields: [periodoId], references: [id])
+  voucher    Voucher?             @relation(fields: [voucherId], references: [id])
+  reserva    Reserva?             @relation(fields: [reservaId], references: [id])
+  comentario ComentarioCorredor?  @relation(fields: [comentarioId], references: [id])
+  accesosLog AccesoLog[]
+
+  @@index([tenantId])
+  @@index([contratoId])
+  @@map("documento")
+}
+
+model AccesoOtp {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  personaId   String    @map("persona_id") @db.Uuid
+  propiedadId String    @map("propiedad_id") @db.Uuid
+  canal       CanalOtp
+  codigoHash  String    @map("codigo_hash")
+  expiraEn    DateTime  @map("expira_en") @db.Timestamptz(6)
+  intentos    Int       @default(0) @db.SmallInt
+  maxIntentos Int       @default(5) @map("max_intentos") @db.SmallInt
+  usadoEn     DateTime? @map("usado_en") @db.Timestamptz(6)
+  ipSolicitud String?   @map("ip_solicitud") @db.Inet
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  persona   Persona   @relation(fields: [personaId], references: [id])
+  propiedad Propiedad @relation(fields: [propiedadId], references: [id])
+
+  @@index([personaId])
+  @@map("acceso_otp")
+}
+
+model AccesoLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  personaId   String?  @map("persona_id") @db.Uuid
+  accion      String
+  documentoId String?  @map("documento_id") @db.Uuid
+  ip          String?  @db.Inet
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  persona   Persona?   @relation(fields: [personaId], references: [id])
+  documento Documento? @relation(fields: [documentoId], references: [id])
+
+  @@map("acceso_log")
+}
+
+// ── Dispositivos de confianza ────────────────────────────────────────────────
+// Registra los dispositivos que el usuario verificó por email.
+// tokenHash = SHA-256(UUID raw) — nunca se guarda el token en texto claro.
+model DispositivoConfiable {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  usuarioId  String   @map("usuario_id") @db.Uuid
+  tokenHash  String   @map("token_hash") @db.Char(64)
+  nombre     String                                                          // "Chrome en Windows"
+  ipCreacion String?  @map("ip_creacion")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at")  @db.Timestamptz(6)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@index([tokenHash])
+  @@map("dispositivo_confiable")
+}
+
+// Código de 6 dígitos para verificar un dispositivo nuevo.
+// Expira en 10 min. Máx 3 intentos fallidos.
+model CodigoDispositivo {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  usuarioId   String    @map("usuario_id") @db.Uuid
+  codigoHash  String    @map("codigo_hash") @db.Char(64)  // SHA-256(codigo + AUTH_SECRET)
+  deviceToken String    @map("device_token") @db.Uuid     // UUID pre-confirmación
+  expiraAt    DateTime  @map("expira_at") @db.Timestamptz(6)
+  intentos    Int       @default(0) @db.SmallInt
+  usadoAt     DateTime? @map("usado_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@map("codigo_dispositivo")
+}
+
+// Token de un solo uso para recuperación de contraseña (CWE-640 mitigation).
+model ResetToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  usuarioId String    @map("usuario_id") @db.Uuid
+  // SHA-256 hex del token raw — NUNCA se almacena el token en texto claro
+  tokenHash String    @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usadoEn   DateTime? @map("usado_en")   @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@index([usuarioId])
+  @@map("reset_token")
+}
+
+// Series temporales globales (sin tenant).
+model SerieUf {
+  fecha    DateTime @id @db.Date
+  valorClp Decimal  @map("valor_clp") @db.Decimal(12, 2)
+
+  @@map("serie_uf")
+}
+
+model SerieIpc {
+  periodo DateTime @id @db.Date
+  indice  Decimal  @db.Decimal(10, 4)
+
+  @@map("serie_ipc")
+}
+
+// ── Feature: Contacto público desde marketplace ───────────────────────────────
+
+// Formulario de contacto enviado por un interesado desde la ficha de propiedad.
+// El token de valoración es de un solo uso y activa el flujo de rating.
+model ConsultaContacto {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  publicacionId    String   @map("publicacion_id") @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  nombre           String
+  apellido         String
+  telefono         String
+  email            String
+  titulo           String
+  descripcion      String   @db.Text
+  quiereContacto   Boolean  @default(true)  @map("quiere_contacto")
+  viaEmail         Boolean  @default(true)  @map("via_email")
+  viaTelefono      Boolean  @default(false) @map("via_telefono")
+  // Token de valoración: generado al enviar, quemado al valorar (single-use)
+  tokenValoracion  String   @unique @map("token_valoracion") @db.Uuid
+  valoracionDada   Boolean  @default(false) @map("valoracion_dada")
+  ip               String?  @db.VarChar(45)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  publicacion Publicacion        @relation(fields: [publicacionId], references: [id])
+  tenant      Tenant             @relation(fields: [tenantId], references: [id])
+  valoracion  ValoracionCorredor?
+
+  @@index([tenantId])
+  @@index([publicacionId])
+  @@map("consulta_contacto")
+}
+
+// ── Feature: Denuncia de propiedades/corredores ───────────────────────────────
+
+enum TipoDenuncia {
+  fraude_inmobiliario  // Venta/arriendo fraudulento
+  estafa               // Apropiación de dineros/garantías
+  informacion_falsa    // Datos falsos en publicación
+  acoso                // Acoso o presión indebida al cliente
+  discriminacion       // Discriminación arbitraria (Ley 20.609)
+  incumplimiento       // Incumplimiento de contrato
+  otro
+}
+
+enum ObjetivoDenuncia {
+  propiedad
+  corredor
+}
+
+// Denuncia anónima o identificada enviada al administrador de la plataforma.
+// Cumple Ley 21.719 (datos personales), Art. 211 CP (denuncia calumniosa).
+model Denuncia {
+  id                    String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tipo                  TipoDenuncia
+  objetivo              ObjetivoDenuncia
+  publicacionId         String?          @map("publicacion_id") @db.Uuid
+  // Para identificar al corredor denunciado (si se conoce)
+  nombreCorredor        String?          @map("nombre_corredor")
+  descripcion           String           @db.Text
+  evidenciaDescripcion  String?          @db.Text @map("evidencia_descripcion")
+  // Datos del denunciante (opcionales si es anónima)
+  esAnonima             Boolean          @default(false) @map("es_anonima")
+  nombreDenunciante     String?          @map("nombre_denunciante")
+  apellidoDenunciante   String?          @map("apellido_denunciante")
+  emailDenunciante      String?          @map("email_denunciante")
+  // Consentimientos obligatorios
+  declaraVeracidad      Boolean          @map("declara_veracidad")   // Art. 211 CP — conoce consecuencias de falsa denuncia
+  aceptaTratamientoDatos Boolean         @map("acepta_tratamiento_datos") // Ley 21.719
+  estado                String           @default("recibida")  // recibida/en_revision/resuelta/desestimada
+  ip                    String?          @db.VarChar(45)
+  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  publicacion Publicacion? @relation(fields: [publicacionId], references: [id])
+
+  @@index([publicacionId])
+  @@map("denuncia")
+}
+
+// ── Feature: Comentarios del corredor al arrendatario ────────────────────────
+
+// Mensajes que el corredor deja en el portal del arrendatario.
+// Pueden incluir documentos adjuntos. Dispara notificación por email.
+model ComentarioCorredor {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  contratoId    String   @map("contrato_id") @db.Uuid
+  texto         String   @db.Text
+  usuarioNombre String   @default("") @map("usuario_nombre")  // desnormalizado para no unir
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  contrato   Contrato   @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+  documentos Documento[]
+
+  @@index([tenantId])
+  @@index([contratoId])
+  @@map("comentario_corredor")
+}
+
+// ── Feature: Valoración de corredor ──────────────────────────────────────────
+
+// Valoración de 1-5 estrellas dejada por un interesado o arrendatario (token de un solo uso).
+// Origen: formulario de contacto (consultaId) O contrato vigente (contratoId).
+model ValoracionCorredor {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  consultaId String?  @unique @map("consulta_id") @db.Uuid
+  contratoId String?  @unique @map("contrato_id") @db.Uuid
+  nombre     String   @default("")
+  apellido   String   @default("")
+  estrellas  Int      @db.SmallInt   // 1–5
+  comentario String?  @db.Text
+  esVisible  Boolean  @default(true) @map("es_visible")  // admin puede ocultar
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id])
+  consulta ConsultaContacto? @relation(fields: [consultaId], references: [id])
+  contrato Contrato?         @relation(fields: [contratoId], references: [id])
+
+  @@index([tenantId])
+  @@map("valoracion_corredor")
+}

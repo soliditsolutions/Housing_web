@@ -1,0 +1,667 @@
+"use client";
+
+import { useActionState, useState, useMemo, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import Image from "next/image";
+import {
+  User, Phone, CalendarDays, MapPin, Lock, Shield,
+  Eye, EyeOff, CheckCircle2, Loader2, Camera,
+} from "lucide-react";
+import { guardarPerfilAction, cambiarPasswordAction } from "./actions";
+import { REGIONES_CHILE, getComunasDeRegion } from "@housing/core";
+import type { PerfilState, PasswordState } from "./actions";
+import { evaluatePassword }        from "@/lib/password-strength";
+import { useToast }                from "@/components/ui/toast";
+import { validateRut, formatRut }  from "@/lib/rut";
+
+// ── Tipos ────────────────────────────────────────────────────────────────────
+
+interface PerfilData {
+  nombre:          string;
+  email:           string;
+  rut:             string | null;
+  telefono:        string | null;
+  fechaNacimiento: Date | null;
+  direccion:       string | null;
+  ciudad:          string | null;
+  region:          string | null;
+  fotoPerfil:      string | null;
+  perfilCompleto:  boolean;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function toDateInput(d: Date | null): string {
+  if (!d) return "";
+  const iso = new Date(d).toISOString();
+  return iso.split("T")[0];
+}
+
+function initials(nombre: string): string {
+  return nombre.split(" ").slice(0, 2).map((p) => p[0] ?? "").join("").toUpperCase();
+}
+
+// ── Sección: avatar ───────────────────────────────────────────────────────────
+
+function AvatarSection({
+  nombre,
+  fotoPerfil,
+  onFotoChange,
+}: {
+  nombre: string;
+  fotoPerfil: string;
+  onFotoChange: (url: string) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res  = await fetch("/api/upload?type=perfil", { method: "POST", body: fd });
+      const data = await res.json() as { url?: string; error?: string };
+      if (data.url) onFotoChange(data.url);
+    } catch {
+      // upload silenced — user retries
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  const hasFoto = fotoPerfil.startsWith("/");
+
+  return (
+    <div className="flex items-center gap-5">
+      {/* Avatar */}
+      <div className="relative shrink-0">
+        {hasFoto ? (
+          <div className="relative h-20 w-20 overflow-hidden rounded-full" style={{ border: "3px solid var(--hw-border)" }}>
+            <Image src={fotoPerfil} alt="Foto de perfil" fill className="object-cover" sizes="80px" />
+          </div>
+        ) : (
+          <div
+            className="flex h-20 w-20 items-center justify-center rounded-full text-xl font-bold text-white"
+            style={{
+              background: "linear-gradient(135deg, var(--hw-primary) 0%, var(--hw-sidebar) 100%)",
+            }}
+          >
+            {initials(nombre)}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          disabled={uploading}
+          aria-label="Cambiar foto de perfil"
+          className="hw-btn absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full text-white shadow-md"
+          style={{ background: "var(--hw-primary)" }}
+        >
+          {uploading
+            ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            : <Camera className="h-3.5 w-3.5" aria-hidden="true" />}
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          className="sr-only"
+          onChange={handleFile}
+          aria-label="Seleccionar foto de perfil"
+        />
+      </div>
+      <div>
+        <p className="font-semibold" style={{ color: "var(--hw-text-1)" }}>{nombre}</p>
+        <p className="text-sm" style={{ color: "var(--hw-text-3)" }}>
+          {hasFoto ? "Haz clic en la cámara para cambiar tu foto" : "Sube una foto de perfil (opcional)"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Sección: cambiar contraseña ───────────────────────────────────────────────
+
+function CambiarPasswordSection() {
+  const { show: toast } = useToast();
+  const [state, formAction, pending] = useActionState<PasswordState, FormData>(
+    cambiarPasswordAction, null,
+  );
+  const [showActual, setShowActual] = useState(false);
+  const [showNuevo,  setShowNuevo]  = useState(false);
+  const [pwd, setPwd] = useState("");
+  const strength = evaluatePassword(pwd);
+
+  useEffect(() => {
+    if (state?.ok) toast("Contraseña actualizada correctamente.", "success");
+  }, [state, toast]);
+
+  const inputStyle = {
+    height: "44px", width: "100%", borderRadius: "12px",
+    border: "1px solid var(--hw-border-2)", background: "var(--hw-surface)",
+    color: "var(--hw-text-1)", fontSize: "14px", padding: "0 44px 0 14px",
+    outline: "none", boxShadow: "var(--hw-input-shadow)",
+  };
+
+  return (
+    <section
+      className="rounded-2xl p-6"
+      style={{ background: "var(--hw-surface)", border: "1px solid var(--hw-border)", boxShadow: "var(--hw-shadow-1)" }}
+    >
+      <div className="flex items-center gap-2 mb-5">
+        <Lock className="h-4 w-4" style={{ color: "var(--hw-primary)" }} aria-hidden="true" />
+        <h2 className="text-base font-semibold" style={{ color: "var(--hw-text-1)" }}>
+          Cambiar contraseña
+        </h2>
+      </div>
+
+      <form action={formAction} className="space-y-4">
+        {/* Contraseña actual */}
+        <div className="space-y-1.5">
+          <label htmlFor="passwordActual" className="block text-sm font-semibold" style={{ color: "var(--hw-text-2)" }}>
+            Contraseña actual
+          </label>
+          <div className="relative">
+            <input
+              id="passwordActual" name="passwordActual"
+              type={showActual ? "text" : "password"}
+              autoComplete="current-password"
+              required disabled={pending}
+              style={{ ...inputStyle, opacity: pending ? 0.6 : 1 }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = "var(--hw-primary)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow-focus)"; }}
+              onBlur={(e)  => { e.currentTarget.style.borderColor = "var(--hw-border-2)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow)"; }}
+            />
+            <button type="button" onClick={() => setShowActual(!showActual)}
+              aria-label={showActual ? "Ocultar contraseña" : "Mostrar contraseña"}
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 hover:opacity-70"
+              style={{ color: "var(--hw-text-4)" }}>
+              {showActual ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+          {!state?.ok && state?.field === "passwordActual" && (
+            <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{state.error}</p>
+          )}
+        </div>
+
+        {/* Nueva contraseña */}
+        <div className="space-y-1.5">
+          <label htmlFor="passwordNuevo" className="block text-sm font-semibold" style={{ color: "var(--hw-text-2)" }}>
+            Nueva contraseña
+          </label>
+          <div className="relative">
+            <input
+              id="passwordNuevo" name="passwordNuevo"
+              type={showNuevo ? "text" : "password"}
+              autoComplete="new-password"
+              required disabled={pending}
+              value={pwd}
+              onChange={(e) => setPwd(e.target.value)}
+              style={{ ...inputStyle, opacity: pending ? 0.6 : 1 }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = "var(--hw-primary)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow-focus)"; }}
+              onBlur={(e)  => { e.currentTarget.style.borderColor = "var(--hw-border-2)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow)"; }}
+            />
+            <button type="button" onClick={() => setShowNuevo(!showNuevo)}
+              aria-label={showNuevo ? "Ocultar contraseña" : "Mostrar contraseña"}
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 hover:opacity-70"
+              style={{ color: "var(--hw-text-4)" }}>
+              {showNuevo ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+
+          {/* Barra de fuerza */}
+          {pwd.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="flex gap-1">
+                {[1, 2, 3, 4].map((i) => (
+                  <div
+                    key={i}
+                    className="h-1.5 flex-1 rounded-full transition-all duration-300"
+                    style={{
+                      background: i <= strength.score
+                        ? strength.color
+                        : "var(--hw-border)",
+                    }}
+                  />
+                ))}
+              </div>
+              <p className="text-xs" style={{ color: strength.passes ? "var(--hw-success)" : "var(--hw-text-3)" }}>
+                {strength.label}
+                {strength.suggestion && ` — ${strength.suggestion}`}
+              </p>
+            </div>
+          )}
+          {!state?.ok && state?.field === "passwordNuevo" && (
+            <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{state.error}</p>
+          )}
+        </div>
+
+        {/* Confirmar */}
+        <div className="space-y-1.5">
+          <label htmlFor="passwordConfirm" className="block text-sm font-semibold" style={{ color: "var(--hw-text-2)" }}>
+            Confirmar nueva contraseña
+          </label>
+          <input
+            id="passwordConfirm" name="passwordConfirm"
+            type="password"
+            autoComplete="new-password"
+            required disabled={pending}
+            style={{ ...inputStyle, padding: "0 14px", opacity: pending ? 0.6 : 1 }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = "var(--hw-primary)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow-focus)"; }}
+            onBlur={(e)  => { e.currentTarget.style.borderColor = "var(--hw-border-2)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow)"; }}
+          />
+          {!state?.ok && state?.field === "passwordConfirm" && (
+            <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{state.error}</p>
+          )}
+        </div>
+
+        {/* Error global */}
+        {!state?.ok && state?.error && !state.field && (
+          <p className="text-sm rounded-xl px-4 py-2.5" style={{ background: "var(--hw-danger-lt)", color: "var(--hw-danger)", border: "1px solid var(--hw-danger-bd)" }}>
+            {state.error}
+          </p>
+        )}
+
+        <button
+          type="submit" disabled={pending || !strength.passes}
+          className="hw-btn-primary"
+          style={{ height: "42px", fontSize: "14px", borderRadius: "10px", opacity: (!strength.passes && pwd.length > 0) ? 0.5 : 1 }}
+        >
+          {pending ? <><Loader2 className="h-4 w-4 animate-spin" />Actualizando…</> : "Actualizar contraseña"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+// ── Sección: 2FA (coming soon) ────────────────────────────────────────────────
+
+function TwoFASection() {
+  return (
+    <section
+      className="rounded-2xl p-6"
+      style={{ background: "var(--hw-surface)", border: "1px solid var(--hw-border)", boxShadow: "var(--hw-shadow-1)" }}
+    >
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex items-center gap-2">
+          <Shield className="h-4 w-4" style={{ color: "var(--hw-primary)" }} aria-hidden="true" />
+          <h2 className="text-base font-semibold" style={{ color: "var(--hw-text-1)" }}>
+            Autenticación de dos factores (2FA)
+          </h2>
+        </div>
+        <span
+          className="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold"
+          style={{ background: "var(--hw-primary-lt)", color: "var(--hw-primary-dk)", border: "1px solid var(--hw-primary-bd)" }}
+        >
+          Próximamente
+        </span>
+      </div>
+
+      <p className="text-sm mb-5" style={{ color: "var(--hw-text-3)" }}>
+        El 2FA agrega una segunda capa de verificación al iniciar sesión. Usarás una app
+        autenticadora (Google Authenticator, Authy u otra) para generar códigos de un solo uso.
+      </p>
+
+      <div className="grid gap-3 sm:grid-cols-2 mb-5">
+        {[
+          { title: "Aplicación TOTP",   desc: "Compatibilidad con Google Authenticator, Authy y cualquier app TOTP estándar (RFC 6238)." },
+          { title: "Códigos de respaldo", desc: "Recibe 8 códigos de un solo uso para recuperar el acceso si pierdes tu dispositivo." },
+        ].map((item) => (
+          <div
+            key={item.title}
+            className="rounded-xl px-4 py-3"
+            style={{ background: "var(--hw-surface-2)", border: "1px solid var(--hw-border)" }}
+          >
+            <p className="text-sm font-semibold mb-0.5" style={{ color: "var(--hw-text-1)" }}>{item.title}</p>
+            <p className="text-xs" style={{ color: "var(--hw-text-3)" }}>{item.desc}</p>
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        disabled
+        aria-disabled="true"
+        title="Disponible próximamente"
+        className="hw-btn-primary opacity-40 cursor-not-allowed"
+        style={{ height: "42px", fontSize: "14px", borderRadius: "10px" }}
+      >
+        <Shield className="h-4 w-4" aria-hidden="true" />
+        Activar 2FA
+      </button>
+    </section>
+  );
+}
+
+// ── Formulario principal de perfil ────────────────────────────────────────────
+
+export function PerfilForm({ perfil, section = "datos" }: { perfil: PerfilData; section?: "datos" | "seguridad" }) {
+  const router = useRouter();
+  const { show: toast } = useToast();
+
+  const [state, formAction, pending] = useActionState<PerfilState, FormData>(
+    guardarPerfilAction, null,
+  );
+
+  const [fotoPerfil, setFotoPerfil] = useState(perfil.fotoPerfil ?? "");
+  const [rut, setRut]               = useState(perfil.rut ?? "");
+  const [region, setRegion]         = useState(perfil.region ?? "");
+  const [ciudad, setCiudad]         = useState(perfil.ciudad ?? "");
+  const comunasDisponibles          = useMemo(() => getComunasDeRegion(region), [region]);
+  const rutInlineError = rut.length > 3 && !validateRut(rut) ? "RUT inválido" : null;
+
+  function handleRutChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const raw = e.target.value.replace(/[^0-9kK]/g, "");
+    setRut(raw.length > 1 ? formatRut(raw) : raw);
+  }
+
+  useEffect(() => {
+    if (!state) return;
+    if (state.ok) {
+      toast("Perfil guardado correctamente.", "success");
+      if (state.perfilCompleto) {
+        // Redirigir al panel tras completar el perfil por primera vez
+        if (!perfil.perfilCompleto) {
+          router.push("/panel");
+        }
+      }
+    }
+  }, [state, toast, router, perfil.perfilCompleto]);
+
+  const labelStyle  = { color: "var(--hw-text-2)" };
+  const inputBase   = {
+    height: "44px", width: "100%", borderRadius: "12px",
+    border: "1px solid var(--hw-border-2)", background: "var(--hw-surface)",
+    color: "var(--hw-text-1)", fontSize: "14px", padding: "0 14px",
+    outline: "none",
+    boxShadow: "var(--hw-input-shadow)",
+    transition: "border-color 150ms ease, box-shadow 150ms ease",
+    opacity: pending ? 0.6 : 1,
+  };
+  const focusHandlers = {
+    onFocus: (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) => {
+      e.currentTarget.style.borderColor = "var(--hw-primary)";
+      e.currentTarget.style.boxShadow   = "var(--hw-input-shadow-focus)";
+    },
+    onBlur: (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) => {
+      e.currentTarget.style.borderColor = "var(--hw-border-2)";
+      e.currentTarget.style.boxShadow   = "var(--hw-input-shadow)";
+    },
+  };
+
+  function fieldError(field: string): string | null {
+    if (!state || state.ok) return null;
+    return state.field === field ? state.error : null;
+  }
+
+  return (
+    <div className="space-y-6">
+      {section === "datos" && (
+        <>
+
+      {/* Sección: foto + nombre */}
+      <section
+        className="rounded-2xl p-6"
+        style={{ background: "var(--hw-surface)", border: "1px solid var(--hw-border)", boxShadow: "var(--hw-shadow-1)" }}
+      >
+        <AvatarSection
+          nombre={perfil.nombre}
+          fotoPerfil={fotoPerfil}
+          onFotoChange={setFotoPerfil}
+        />
+        <input type="hidden" name="fotoPerfil" value={fotoPerfil} form="perfil-form" />
+      </section>
+
+      {/* Sección: datos del corredor */}
+      <form id="perfil-form" action={formAction}>
+        <input type="hidden" name="fotoPerfil" value={fotoPerfil} />
+
+        <section
+          className="rounded-2xl p-6 space-y-5"
+          style={{ background: "var(--hw-surface)", border: "1px solid var(--hw-border)", boxShadow: "var(--hw-shadow-1)" }}
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <User className="h-4 w-4" style={{ color: "var(--hw-primary)" }} aria-hidden="true" />
+            <h2 className="text-base font-semibold" style={{ color: "var(--hw-text-1)" }}>
+              Información personal
+            </h2>
+          </div>
+
+          {/* Nombre (read-only) */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <label className="block text-sm font-semibold" style={labelStyle}>
+                Nombre completo
+              </label>
+              <input
+                type="text" value={perfil.nombre} disabled readOnly
+                style={{ ...inputBase, opacity: 0.5, cursor: "not-allowed" }}
+              />
+            </div>
+
+            {/* Email (read-only) */}
+            <div className="space-y-1.5">
+              <label className="block text-sm font-semibold" style={labelStyle}>
+                Correo electrónico
+              </label>
+              <input
+                type="email" value={perfil.email} disabled readOnly
+                style={{ ...inputBase, opacity: 0.5, cursor: "not-allowed" }}
+              />
+            </div>
+          </div>
+
+          {/* RUT */}
+          <div className="space-y-1.5">
+            <label htmlFor="rut" className="block text-sm font-semibold" style={labelStyle}>
+              RUT{" "}
+              <span style={{ color: "var(--hw-danger)" }}>*</span>
+            </label>
+            <input
+              id="rut" name="rut" type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={12}
+              value={rut}
+              onChange={handleRutChange}
+              placeholder="12.345.678-9"
+              required disabled={pending}
+              style={{
+                ...inputBase,
+                borderColor: (rutInlineError || fieldError("rut")) ? "var(--hw-danger)" : undefined,
+              }}
+              {...focusHandlers}
+            />
+            {(rutInlineError || fieldError("rut")) && (
+              <p className="text-xs" style={{ color: "var(--hw-danger)" }}>
+                {fieldError("rut") ?? rutInlineError}
+              </p>
+            )}
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {/* Teléfono */}
+            <div className="space-y-1.5">
+              <label htmlFor="telefono" className="block text-sm font-semibold" style={labelStyle}>
+                <Phone className="inline h-3.5 w-3.5 mr-1 mb-0.5" aria-hidden="true" />
+                Teléfono{" "}
+                <span style={{ color: "var(--hw-danger)" }}>*</span>
+              </label>
+              <input
+                id="telefono" name="telefono" type="tel"
+                defaultValue={perfil.telefono ?? ""}
+                placeholder="+56 9 1234 5678"
+                required disabled={pending}
+                style={inputBase}
+                {...focusHandlers}
+              />
+              {fieldError("telefono") && (
+                <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("telefono")}</p>
+              )}
+            </div>
+
+            {/* Fecha de nacimiento */}
+            <div className="space-y-1.5">
+              <label htmlFor="fechaNacimiento" className="block text-sm font-semibold" style={labelStyle}>
+                <CalendarDays className="inline h-3.5 w-3.5 mr-1 mb-0.5" aria-hidden="true" />
+                Fecha de nacimiento{" "}
+                <span style={{ color: "var(--hw-danger)" }}>*</span>
+              </label>
+              <input
+                id="fechaNacimiento" name="fechaNacimiento" type="date"
+                defaultValue={toDateInput(perfil.fechaNacimiento)}
+                required disabled={pending}
+                style={inputBase}
+                {...focusHandlers}
+              />
+              {fieldError("fechaNacimiento") && (
+                <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("fechaNacimiento")}</p>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Sección: dirección */}
+        <section
+          className="rounded-2xl p-6 space-y-5 mt-6"
+          style={{ background: "var(--hw-surface)", border: "1px solid var(--hw-border)", boxShadow: "var(--hw-shadow-1)" }}
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <MapPin className="h-4 w-4" style={{ color: "var(--hw-primary)" }} aria-hidden="true" />
+            <h2 className="text-base font-semibold" style={{ color: "var(--hw-text-1)" }}>
+              Dirección profesional
+            </h2>
+          </div>
+
+          {/* Dirección */}
+          <div className="space-y-1.5">
+            <label htmlFor="direccion" className="block text-sm font-semibold" style={labelStyle}>
+              Dirección{" "}
+              <span style={{ color: "var(--hw-danger)" }}>*</span>
+            </label>
+            <input
+              id="direccion" name="direccion" type="text"
+              defaultValue={perfil.direccion ?? ""}
+              placeholder="Av. Providencia 1234, oficina 56"
+              required disabled={pending}
+              style={inputBase}
+              {...focusHandlers}
+            />
+            {fieldError("direccion") && (
+              <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("direccion")}</p>
+            )}
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {/* Región */}
+            <div className="space-y-1.5">
+              <label htmlFor="region" className="block text-sm font-semibold" style={labelStyle}>
+                Región{" "}
+                <span style={{ color: "var(--hw-danger)" }}>*</span>
+              </label>
+              <select
+                id="region" name="region"
+                value={region}
+                onChange={(e) => { setRegion(e.target.value); setCiudad(""); }}
+                required disabled={pending}
+                style={{
+                  ...inputBase,
+                  padding: "0 14px",
+                  cursor: "pointer",
+                  appearance: "auto",
+                }}
+                {...focusHandlers}
+              >
+                <option value="">Seleccionar región…</option>
+                {REGIONES_CHILE.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+              {fieldError("region") && (
+                <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("region")}</p>
+              )}
+            </div>
+
+            {/* Ciudad / comuna — depende de la región elegida */}
+            <div className="space-y-1.5">
+              <label htmlFor="ciudad" className="block text-sm font-semibold" style={labelStyle}>
+                Ciudad / comuna{" "}
+                <span style={{ color: "var(--hw-danger)" }}>*</span>
+              </label>
+              <select
+                id="ciudad" name="ciudad"
+                value={ciudad}
+                onChange={(e) => setCiudad(e.target.value)}
+                required disabled={pending || !region}
+                style={{
+                  ...inputBase,
+                  padding: "0 14px",
+                  cursor: region ? "pointer" : "not-allowed",
+                  appearance: "auto",
+                }}
+                {...focusHandlers}
+              >
+                <option value="">{region ? "Seleccionar comuna…" : "Primero elige una región"}</option>
+                {comunasDisponibles.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              {fieldError("ciudad") && (
+                <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("ciudad")}</p>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Error global */}
+        {state && !state.ok && !state.field && (
+          <div
+            className="mt-4 flex items-center gap-2.5 rounded-xl px-4 py-3 text-sm"
+            role="alert"
+            style={{ background: "var(--hw-danger-lt)", color: "var(--hw-danger)", border: "1px solid var(--hw-danger-bd)" }}
+          >
+            {state.error}
+          </div>
+        )}
+
+        {/* Submit */}
+        <div className="mt-6 flex items-center gap-4">
+          <button
+            type="submit" disabled={pending}
+            className="hw-btn-primary"
+            style={{ height: "46px", fontSize: "15px", borderRadius: "12px", padding: "0 28px" }}
+          >
+            {pending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                Guardando…
+              </>
+            ) : (
+              <>
+                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                Guardar perfil
+              </>
+            )}
+          </button>
+          {state?.ok && (
+            <span className="text-sm" style={{ color: "var(--hw-success)" }}>
+              ✓ Cambios guardados
+            </span>
+          )}
+        </div>
+      </form>
+
+        </>
+      )}
+
+      {section === "seguridad" && (
+        <>
+          <CambiarPasswordSection />
+          <TwoFASection />
+        </>
+      )}
+    </div>
+  );
+}

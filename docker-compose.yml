@@ -1,0 +1,19 @@
+# PostgreSQL local para desarrollo del MVP.
+# Uso: npm run db:up  (requiere Docker Desktop instalado)
+services:
+  db:
+    image: postgres:16
+    container_name: housing-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: housing
+      POSTGRES_PASSWORD: housing_dev
+      POSTGRES_DB: housing
+    # Host 5433 para no chocar con un Postgres ya instalado en 5432.
+    ports:
+      - "5433:5432"
+    volumes:
+      - housing_pgdata:/var/lib/postgresql/data
+
+volumes:
+  housing_pgdata:
