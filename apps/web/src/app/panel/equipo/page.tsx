@@ -1,5 +1,5 @@
 import { getActor } from "@/lib/queries";
-import { getEquipo, getInvitacionesPendientes } from "./actions";
+import { getEquipo, getInvitacionesPendientes, getCupoInfo } from "./actions";
 import { PageTitle } from "@/components/panel/ui";
 import { EquipoClient } from "./equipo-client";
 
@@ -10,9 +10,10 @@ export default async function EquipoPage() {
   // getActor() (usado dentro de getEquipo()) es la defensa en profundidad.
   const actor = await getActor();
 
-  const [colaboradores, invitaciones] = await Promise.all([
+  const [colaboradores, invitaciones, cupo] = await Promise.all([
     getEquipo(),
     getInvitacionesPendientes(actor.tenantId),
+    getCupoInfo(),
   ]);
 
   return (
@@ -35,6 +36,7 @@ export default async function EquipoPage() {
           email:     i.email,
           expiresAt: i.expiresAt.toISOString(),
         }))}
+        cupo={cupo}
       />
     </>
   );

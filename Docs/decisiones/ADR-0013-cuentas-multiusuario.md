@@ -1,7 +1,7 @@
 # ADR-0013 — Cuentas multi-usuario (Manager / Collaborator)
 
-- **Fecha**: 2026-07-27 (diseño) / 2026-07-28 (Fase A) / 2026-07-29 (Fases B, C y D)
-- **Estado**: Aceptada — Fases A, B, C y D completas; E pendiente
+- **Fecha**: 2026-07-27 (diseño) / 2026-07-28 (Fase A) / 2026-07-29 (Fases B, C, D y E)
+- **Estado**: Aceptada — Fases A-E completas
 
 ## Contexto
 
@@ -67,9 +67,15 @@ Hasta ahora cada `Tenant` (la cuenta de la corredora) podía tener uno o más `U
 - Cobertura de tests nueva/actualizada: `propiedades-actions.test.ts` (26 casos), `contratos/[id]/__tests__/contrato-ownership.test.ts` (nuevo, 5 casos), `cobros-actions.test.ts` (13 casos, migrado de mock `getTenant`→`getActor`), `nav.test.tsx` (gating de Estadísticas).
 - Verificación en navegador: María (manager) ve las 4 propiedades y todos los módulos sin cambios; Pedro (colaborador) con 0 propiedades asignadas ve estados vacíos en todos los módulos filtrados sin crashear (incluida la generación batch de recordatorios) y es redirigido de `/panel/estadisticas`; con 1 propiedad asignada, Propiedades muestra exactamente esa; intentar acceder por URL directa a un contrato de una propiedad no asignada devuelve un 404 limpio (`notFound()`), sin filtrar datos del contrato — protección IDOR confirmada.
 
-### Fase pendiente
+### Fase E (implementada 2026-07-29) — cupos por plan
 
-E (cupos por plan). Ver el plan de implementación original para el detalle.
+- **Una sola fuente numérica, pensada para cambiar fácil**: `Plan.maxUsuarios` en `lib/plans.ts` (bronze:1, silver:2, gold:5, diamond:10). El texto de marketing de la card ("Acceso para 1 usuario" / "Multicuenta: hasta N usuarios") se genera desde ese mismo número vía `usuariosFeatureText()` — cambiar el cupo de un plan es editar un solo número; la copy y el enforcement nunca pueden quedar desincronizados porque ya no son dos lugares distintos.
+- `getCupoUsuarios(plan: string | null): number` — mismo criterio de fallback que `getAnalyticsTier()` (plan-tier.ts): `Tenant.plan` es un string libre sin billing real todavía (todo signup nuevo recibe `"Gratuito"`), así que cualquier valor desconocido cae en el cupo de Bronze (el más bajo), nunca en "sin límite".
+- **Qué cuenta para el cupo**: Manager (+1 siempre) + Colaboradores activos + invitaciones pendientes no vencidas (`contarCupoUsado()` en `panel/equipo/actions.ts`). Una invitación pendiente ocupa cupo igual que un Colaborador activo (ROL-FLU-5) — si no contara, el Manager podría invitar más gente de la que el plan permite mientras las invitaciones siguen sin aceptarse. Verificado en navegador: con el tenant en plan Gold (5) y 2 cupos usados, se envía una invitación y el contador sube a 3/5 en vivo (sin recargar aparte, vía `router.refresh()`); bajar el plan a Silver (2) con esa invitación todavía pendiente deja el cupo en 3/2 — sobre el límite — y el formulario se bloquea de inmediato, confirmando que el pendiente sí cuenta.
+- `invitarColaboradorAction` rechaza (mensaje explícito con el número del plan) cuando `cupoUsado >= cupoMax`, verificado server-side antes de cualquier otra validación — no solo oculto en la UI (mismo patrón ROL-SEC-3/4 del resto del ADR).
+- `getCupoInfo()` expone `{usado, max, planLabel}` a `/panel/equipo`: badge visible junto al formulario de invitación (verde/neutro bajo el límite, rojo al límite) y mensaje explicativo + inputs deshabilitados cuando se alcanza el cupo — visible **antes** de que el Manager llene el formulario (ROL-UI-4), no como error sorpresa después de escribir.
+- Cobertura de tests: `panel/equipo/__tests__/equipo-actions.test.ts` (nuevo, 10 casos) — rechazo por colaboradores activos, rechazo por invitación pendiente (ROL-FLU-5), límite exacto permitido/rechazado en Silver/Gold/Diamond, fallback de plan desconocido/"Gratuito" a Bronze, rol-check corre antes que el cupo-check, `getCupoInfo()` para la UI.
+- Con A-E implementadas, el ciclo completo de cuentas multi-usuario del ADR queda cerrado: un Manager gestiona su equipo de punta a punta (invitar, asignar propiedades, offboarding) dentro de los límites reales de su plan, y un Colaborador solo ve/gestiona lo que le corresponde.
 
 ## Alternativas consideradas
 
@@ -81,4 +87,5 @@ E (cupos por plan). Ver el plan de implementación original para el detalle.
 
 - Todo código nuevo que necesite "quién soy y qué tenant" debe usar `getActor()`, no re-implementar la lectura de sesión — hereda gratis la verificación de usuario desactivado.
 - Cualquier futuro chequeo de autorización que pueda terminar en "cerrar sesión" debe vivir en una Server Action, Route Handler, o un Server Component que redirija a una de esas dos (nunca intentar mutar cookies directamente en un layout/page).
-- Fase E queda pendiente (cupos por plan) — con A-D implementadas, el ciclo completo Manager→invita→asigna propiedad→Collaborator ve/gestiona solo lo suyo ya funciona de punta a punta, incluida la protección IDOR a nivel de Server Action y de página.
+- Con A-E implementadas, el ciclo completo Manager→invita (dentro del cupo de su plan)→asigna propiedad→Collaborator ve/gestiona solo lo suyo funciona de punta a punta, incluida la protección IDOR a nivel de Server Action y de página.
+- Cualquier cambio futuro a los cupos por plan (subir/bajar un número, agregar un plan nuevo) se hace en un solo lugar: `Plan.maxUsuarios` en `lib/plans.ts` — no hay una segunda fuente de verdad que se pueda desincronizar.

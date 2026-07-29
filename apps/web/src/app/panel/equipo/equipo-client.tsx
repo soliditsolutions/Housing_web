@@ -28,25 +28,44 @@ type Invitacion = {
   expiresAt: string;
 };
 
+type Cupo = { usado: number; max: number; planLabel: string };
+
 function diasRestantes(expiresAt: string): number {
   const ms = new Date(expiresAt).getTime() - Date.now();
   return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
 }
 
-function InvitarForm() {
+function CupoBadge({ cupo }: { cupo: Cupo }) {
+  const lleno = cupo.usado >= cupo.max;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
+      style={{
+        background: lleno ? "var(--hw-danger-lt)"  : "var(--hw-surface-2)",
+        color:      lleno ? "var(--hw-danger)"      : "var(--hw-text-3)",
+        border:     `1px solid ${lleno ? "var(--hw-danger-bd)" : "var(--hw-border-2)"}`,
+      }}
+    >
+      {cupo.usado} / {cupo.max} usuarios · plan {cupo.planLabel}
+    </span>
+  );
+}
+
+function InvitarForm({ cupo }: { cupo: Cupo }) {
   const router = useRouter();
   const { show: toast } = useToast();
   const [isPending, startTransition] = useTransition();
   const [nombre, setNombre] = useState("");
   const [email, setEmail]   = useState("");
   const [error, setError]   = useState("");
+  const lleno = cupo.usado >= cupo.max;
 
   const inputStyle: React.CSSProperties = {
     height: "44px", width: "100%", borderRadius: "12px",
     border: "1px solid var(--hw-border-2)", background: "var(--hw-surface)",
     color: "var(--hw-text-1)", fontSize: "14px", padding: "0 14px",
     outline: "none", boxShadow: "var(--hw-input-shadow)",
-    opacity: isPending ? 0.6 : 1,
+    opacity: (isPending || lleno) ? 0.6 : 1,
   };
   const focusHandlers = {
     onFocus: (e: React.FocusEvent<HTMLInputElement>) => {
@@ -75,10 +94,22 @@ function InvitarForm() {
       className="rounded-2xl p-6"
       style={{ background: "var(--hw-surface)", border: "1px solid var(--hw-border)", boxShadow: "var(--hw-shadow-1)" }}
     >
-      <div className="mb-4 flex items-center gap-2">
-        <UserPlus className="h-4 w-4" style={{ color: "var(--hw-primary)" }} aria-hidden="true" />
-        <h2 className="text-base font-semibold" style={{ color: "var(--hw-text-1)" }}>Invitar colaborador</h2>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <UserPlus className="h-4 w-4" style={{ color: "var(--hw-primary)" }} aria-hidden="true" />
+          <h2 className="text-base font-semibold" style={{ color: "var(--hw-text-1)" }}>Invitar colaborador</h2>
+        </div>
+        <CupoBadge cupo={cupo} />
       </div>
+
+      {lleno && (
+        <p
+          className="mb-4 rounded-xl px-4 py-3 text-sm"
+          style={{ background: "var(--hw-warning-lt)", color: "var(--hw-warning)", border: "1px solid var(--hw-warning-bd)" }}
+        >
+          Alcanzaste el límite de {cupo.max} usuario{cupo.max !== 1 ? "s" : ""} de tu plan {cupo.planLabel}. Desactiva a alguien o mejora tu plan para invitar a más gente.
+        </p>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
@@ -88,7 +119,7 @@ function InvitarForm() {
           <input
             id="equipo-nombre" type="text" value={nombre}
             onChange={(e) => setNombre(e.target.value)}
-            placeholder="Juan Pérez" disabled={isPending}
+            placeholder="Juan Pérez" disabled={isPending || lleno}
             style={inputStyle} {...focusHandlers}
           />
         </div>
@@ -99,7 +130,7 @@ function InvitarForm() {
           <input
             id="equipo-email" type="email" value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="juan@empresa.cl" disabled={isPending}
+            placeholder="juan@empresa.cl" disabled={isPending || lleno}
             style={inputStyle} {...focusHandlers}
           />
         </div>
@@ -112,9 +143,9 @@ function InvitarForm() {
       <button
         type="button"
         onClick={handleInvitar}
-        disabled={isPending || !nombre.trim() || !email.trim()}
+        disabled={isPending || lleno || !nombre.trim() || !email.trim()}
         className="hw-btn-primary mt-4"
-        style={{ height: "42px", fontSize: "14px", borderRadius: "10px", opacity: (!nombre.trim() || !email.trim()) ? 0.5 : 1 }}
+        style={{ height: "42px", fontSize: "14px", borderRadius: "10px", opacity: (lleno || !nombre.trim() || !email.trim()) ? 0.5 : 1 }}
       >
         {isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Send className="h-4 w-4" aria-hidden="true" />}
         {isPending ? "Enviando…" : "Enviar invitación"}
@@ -182,13 +213,15 @@ function ColaboradorRow({ c }: { c: Colaborador }) {
 export function EquipoClient({
   colaboradores,
   invitaciones,
+  cupo,
 }: {
   colaboradores: Colaborador[];
   invitaciones: Invitacion[];
+  cupo: Cupo;
 }) {
   return (
     <div className="space-y-6">
-      <InvitarForm />
+      <InvitarForm cupo={cupo} />
 
       <section
         className="overflow-hidden rounded-2xl"

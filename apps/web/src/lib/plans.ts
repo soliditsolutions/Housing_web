@@ -18,6 +18,13 @@ export type Plan = {
   /** Etiqueta de ahorro que aparece al facturar anual. */
   annualSavings: string;
   features: PlanFeature[];
+  /**
+   * Cupo de usuarios del tenant (Manager incluido). Única fuente para el
+   * enforcement real de ADR-0013 Fase E (`getCupoUsuarios()` más abajo) y
+   * para la línea "Acceso/Multicuenta" de la card — cambiar este número
+   * basta para actualizar ambos a la vez, no hay que tocar el texto aparte.
+   */
+  maxUsuarios: number;
   /** Plan destacado visualmente ("Más popular"). */
   featured?: boolean;
 };
@@ -26,6 +33,12 @@ const TOOLTIP_SLOTS =
   "Espacios para propiedades en arriendo — cuentan las disponibles, las arrendadas y las en pausa.";
 const TOOLTIP_TOKENS =
   "Cada token equivale a una revisión de contrato con IA. El cupo se renueva todos los días.";
+
+function usuariosFeatureText(maxUsuarios: number): string {
+  return maxUsuarios === 1
+    ? "Acceso para 1 usuario"
+    : `Multicuenta: hasta ${maxUsuarios} usuarios`;
+}
 
 /** Única fuente de los 4 planes — la usa la parada "Nuestros Planes" del
  * escenario walkthrough (ver PlanesStop.tsx). */
@@ -42,9 +55,10 @@ export const PLANS: Plan[] = [
       { text: "7 slots para propiedades", tooltip: TOOLTIP_SLOTS },
       { text: "3 tokens diarios de IA", tooltip: TOOLTIP_TOKENS },
       { text: "Analítica básica de cartera" },
-      { text: "Acceso para 1 usuario" },
+      { text: usuariosFeatureText(1) },
       { text: "Soporte técnico estándar" },
     ],
+    maxUsuarios: 1,
   },
   {
     id: "silver",
@@ -58,9 +72,10 @@ export const PLANS: Plan[] = [
       { text: "20 slots para propiedades", tooltip: TOOLTIP_SLOTS },
       { text: "7 tokens diarios de IA", tooltip: TOOLTIP_TOKENS },
       { text: "Analítica intermedia de desempeño" },
-      { text: "Multicuenta: hasta 2 usuarios" },
+      { text: usuariosFeatureText(2) },
       { text: "Soporte técnico estándar" },
     ],
+    maxUsuarios: 2,
   },
   {
     id: "gold",
@@ -74,9 +89,10 @@ export const PLANS: Plan[] = [
       { text: "50 slots para propiedades", tooltip: TOOLTIP_SLOTS },
       { text: "25 tokens diarios de IA", tooltip: TOOLTIP_TOKENS },
       { text: "Analítica avanzada de portafolio" },
-      { text: "Multicuenta: hasta 5 usuarios" },
+      { text: usuariosFeatureText(5) },
       { text: "Soporte técnico estándar" },
     ],
+    maxUsuarios: 5,
     featured: true,
   },
   {
@@ -91,8 +107,27 @@ export const PLANS: Plan[] = [
       { text: "200 slots para propiedades", tooltip: TOOLTIP_SLOTS },
       { text: "Tokens de IA ilimitados", tooltip: TOOLTIP_TOKENS },
       { text: "Analítica premium + exportación" },
-      { text: "Multicuenta: hasta 10 usuarios" },
+      { text: usuariosFeatureText(10) },
       { text: "Soporte técnico estándar" },
     ],
+    maxUsuarios: 10,
   },
 ];
+
+const CUPO_USUARIOS_POR_PLAN: Record<PlanId, number> = Object.fromEntries(
+  PLANS.map((p) => [p.id, p.maxUsuarios]),
+) as Record<PlanId, number>;
+
+/**
+ * Cupo de usuarios (Manager + Colaboradores activos + invitaciones
+ * pendientes) permitido por el plan del tenant — ADR-0013 Fase E.
+ *
+ * `Tenant.plan` es un string libre sin respaldo de billing todavía (todo
+ * signup nuevo recibe "Gratuito" — ver registro/actions.ts), mismo criterio
+ * de fallback que `getAnalyticsTier()` en plan-tier.ts: cualquier valor que
+ * no calce con un PlanId conocido cae en el cupo de Bronze (el más bajo),
+ * nunca en "sin límite".
+ */
+export function getCupoUsuarios(plan: string | null): number {
+  return CUPO_USUARIOS_POR_PLAN[plan as PlanId] ?? CUPO_USUARIOS_POR_PLAN.bronze;
+}
