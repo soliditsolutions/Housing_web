@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { getTenant, getPeriodosPendientes } from "@/lib/queries";
+import { getActor, getPeriodosPendientes, propiedadIdsVisibles } from "@/lib/queries";
 import { withTenant } from "@/lib/tenant-db";
 import { PageTitle, StatCard } from "@/components/panel/ui";
 import { clp } from "@/lib/format";
@@ -9,8 +9,10 @@ import { CheckCircle2, TrendingUp } from "lucide-react";
 export const dynamic = "force-dynamic";
 
 export default async function CobrosPage() {
-  const tenant   = await getTenant();
-  const periodos = await getPeriodosPendientes(tenant.id);
+  const actor    = await getActor();
+  const tenant   = actor.tenant;
+  const propiedadIds = await propiedadIdsVisibles(actor);
+  const periodos = await getPeriodosPendientes(tenant.id, propiedadIds);
 
   const atrasados    = periodos.filter((p) => p.estado === "atrasado").length;
   const porCerrar    = periodos.filter((p) => p.estado === "pagado").length;
@@ -21,9 +23,12 @@ export default async function CobrosPage() {
   // Progreso global: liquidados / total vencidos (todos los períodos pasados).
   // Secuencial, no Promise.all: tx comparte una única conexión Postgres.
   const [liquidadosTotal, totalVencidos] = await withTenant(tenant.id, async (tx) => {
-    const liquidadosTotal = await tx.periodoPago.count({ where: { tenantId: tenant.id, estado: "liquidado" } });
+    const filtroPropiedad = propiedadIds ? { contrato: { propiedadId: { in: propiedadIds } } } : {};
+    const liquidadosTotal = await tx.periodoPago.count({
+      where: { tenantId: tenant.id, estado: "liquidado", ...filtroPropiedad },
+    });
     const totalVencidos = await tx.periodoPago.count({
-      where: { tenantId: tenant.id, estado: { in: ["liquidado", "pagado", "atrasado"] } },
+      where: { tenantId: tenant.id, estado: { in: ["liquidado", "pagado", "atrasado"] }, ...filtroPropiedad },
     });
     return [liquidadosTotal, totalVencidos] as const;
   });

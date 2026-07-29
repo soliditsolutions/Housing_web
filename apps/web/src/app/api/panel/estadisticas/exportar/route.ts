@@ -14,6 +14,12 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "No autorizado." }, { status: 401 });
   }
+  // ADR-0013 (Fase D) — Estadísticas es exclusiva del Manager; esta ruta no
+  // pasa por el matcher de proxy.ts (solo cubre /panel/:path*, no /api/panel/*),
+  // así que el guard va aquí directamente.
+  if (session.rol !== "manager") {
+    return NextResponse.json({ error: "No autorizado." }, { status: 403 });
+  }
 
   let tenant;
   try {

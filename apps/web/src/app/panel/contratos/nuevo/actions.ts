@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getTenant, getUfCLP } from "@/lib/queries";
+import { getTenant, getActor, getUfCLP } from "@/lib/queries";
 import { withTenant } from "@/lib/tenant-db";
 import { generarCalendario, validarRut } from "@housing/core";
 import { canonicalRut } from "@/lib/rut";
@@ -124,7 +124,8 @@ export async function crearContrato(data: DatosContrato): Promise<ResultadoContr
   }
 
   try {
-    const tenant = await getTenant();
+    const actor  = await getActor();
+    const tenant = actor.tenant;
 
     const fechaInicio = new Date(data.fechaInicio + "T00:00:00Z");
 
@@ -186,6 +187,9 @@ export async function crearContrato(data: DatosContrato): Promise<ResultadoContr
         throw new DomainError(
           "La propiedad no está disponible o no pertenece a este corredor.",
         );
+      // ADR-0013 (Fase D) — un Colaborador solo crea contratos sobre lo que tiene asignado.
+      if (actor.rol !== "manager" && propVerif.asignadoAId !== actor.usuarioId)
+        throw new DomainError("No tienes acceso a esta propiedad.");
 
       /* 0b. SC-CRIT-2: verificar que el propietario pertenece al tenant */
       const propietarioVerif = await tx.persona.findFirst({

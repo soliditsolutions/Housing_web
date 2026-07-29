@@ -1085,15 +1085,19 @@ export function PropiedadesClient({
         onBusquedaChange={setBusqueda}
         searchPlaceholder="Buscar por dirección, tipo, propietario…"
         rightActions={
-          <button
-            type="button"
-            onClick={() => { setOpenCrear(true); setErrorCrear(""); setRutErrorCrear(""); setFormCrear(FORM_CREAR_INICIAL); }}
-            className="hw-btn-primary"
-            style={{ height: "32px", fontSize: "12px", padding: "0 12px" }}
-          >
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-            Nueva propiedad
-          </button>
+          // ADR-0013 (Fase D) — crear propiedad es exclusivo del Manager; un
+          // Colaborador gestiona lo asignado, no crea inventario nuevo.
+          esManager ? (
+            <button
+              type="button"
+              onClick={() => { setOpenCrear(true); setErrorCrear(""); setRutErrorCrear(""); setFormCrear(FORM_CREAR_INICIAL); }}
+              className="hw-btn-primary"
+              style={{ height: "32px", fontSize: "12px", padding: "0 12px" }}
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              Nueva propiedad
+            </button>
+          ) : undefined
         }
       >
         {FILTROS.map((f) => (

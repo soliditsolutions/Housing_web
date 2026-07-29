@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
-import { getTenant } from "@/lib/queries";
+import { getActor, propiedadIdsVisibles } from "@/lib/queries";
 import { withTenant } from "@/lib/tenant-db";
 import { PageTitle } from "@/components/panel/ui";
 import { NuevoContratoClient } from "./nuevo-contrato-client";
@@ -8,13 +8,17 @@ import { NuevoContratoClient } from "./nuevo-contrato-client";
 export const dynamic = "force-dynamic";
 
 export default async function NuevoContratoPage() {
-  const tenant = await getTenant();
+  const actor = await getActor();
+  const propiedadIds = await propiedadIdsVisibles(actor);
 
-  // Solo propiedades disponibles o reservadas (no arrendadas ni archivadas)
-  const propiedadesRaw = await withTenant(tenant.id, (tx) => tx.propiedad.findMany({
+  // Solo propiedades disponibles o reservadas (no arrendadas ni archivadas);
+  // ADR-0013 (Fase D) — un Colaborador solo puede crear un contrato sobre una
+  // propiedad que tiene asignada.
+  const propiedadesRaw = await withTenant(actor.tenantId, (tx) => tx.propiedad.findMany({
     where: {
-      tenantId: tenant.id,
+      tenantId: actor.tenantId,
       estado: { in: ["disponible", "reservada"] },
+      ...(propiedadIds ? { id: { in: propiedadIds } } : {}),
     },
     include: {
       propietario: { select: { id: true, nombre: true } },

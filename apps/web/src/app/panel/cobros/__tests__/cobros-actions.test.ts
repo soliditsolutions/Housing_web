@@ -9,8 +9,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-const mockGetTenant = vi.fn();
-vi.mock("@/lib/queries", () => ({ getTenant: mockGetTenant }));
+const mockGetActor = vi.fn();
+vi.mock("@/lib/queries", () => ({ getActor: mockGetActor }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
@@ -100,7 +100,7 @@ describe("simularPago — validación de entrada (sin TX)", () => {
 describe("simularPago — BL-RC1 (idempotencia contra doble-submit)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetTenant.mockResolvedValue({ id: "tenant-abc" });
+    mockGetActor.mockResolvedValue({ usuarioId: "mgr-1", tenantId: "tenant-abc", rol: "manager", tenant: { id: "tenant-abc" } });
     // Simula TX interactiva llamando al callback con mockTx
     mockPrismaTransaction.mockImplementation(
       async (callback: (tx: typeof mockTx) => Promise<unknown>) => callback(mockTx),
@@ -172,7 +172,7 @@ describe("cerrarLiquidacion — validación de entrada (sin TX)", () => {
 describe("cerrarLiquidacion — BL-RC2 (idempotencia contra doble-submit)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetTenant.mockResolvedValue({ id: "tenant-abc" });
+    mockGetActor.mockResolvedValue({ usuarioId: "mgr-1", tenantId: "tenant-abc", rol: "manager", tenant: { id: "tenant-abc" } });
     mockPrismaTransaction.mockImplementation(
       async (callback: (tx: typeof mockTx) => Promise<unknown>) => callback(mockTx),
     );
@@ -223,5 +223,44 @@ describe("cerrarLiquidacion — BL-RC2 (idempotencia contra doble-submit)", () =
     if (!result.ok) {
       expect(result.error).toMatch(/ya fue liquidado/i);
     }
+  });
+});
+
+describe("simularPago — ownership (ADR-0013, Fase D)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPrismaTransaction.mockImplementation(
+      async (callback: (tx: typeof mockTx) => Promise<unknown>) => callback(mockTx),
+    );
+    mockConciliar.mockReturnValue({ estado: "conciliado", totalEsperado: 500000, diferencia: 0 });
+  });
+
+  it("rechaza si un Colaborador intenta conciliar el pago de una propiedad que no tiene asignada", async () => {
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-x", tenantId: "tenant-abc", rol: "colaborador", tenant: { id: "tenant-abc" } });
+    mockTx.periodoPago.findFirst.mockResolvedValue({
+      ...periodoBase,
+      contrato: { ...periodoBase.contrato, propiedad: { asignadoAId: "colab-1" } },
+    });
+
+    const result = await simularPago("periodo-123", "2026-06-18", 500000);
+
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/no tienes acceso/i) });
+    expect(mockTx.periodoPago.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("permite al Colaborador dueño de la propiedad conciliar su propio pago", async () => {
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-1", tenantId: "tenant-abc", rol: "colaborador", tenant: { id: "tenant-abc" } });
+    mockTx.periodoPago.findFirst.mockResolvedValue({
+      ...periodoBase,
+      contrato: { ...periodoBase.contrato, propiedad: { asignadoAId: "colab-1" } },
+    });
+    mockTx.periodoPago.updateMany.mockResolvedValue({ count: 1 });
+    mockTx.asientoLedger.create.mockResolvedValue({});
+    mockTx.voucher.create.mockResolvedValue({});
+    mockTx.notificacion.create.mockResolvedValue({});
+
+    const result = await simularPago("periodo-123", "2026-06-18", 500000);
+
+    expect(result.ok).toBe(true);
   });
 });

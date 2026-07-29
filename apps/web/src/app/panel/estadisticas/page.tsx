@@ -1,4 +1,5 @@
-import { getTenant } from "@/lib/queries";
+import { redirect } from "next/navigation";
+import { getActor } from "@/lib/queries";
 import { PageTitle } from "@/components/panel/ui";
 import { TabNav } from "@/components/panel/tab-nav";
 import { getAnalyticsTier, tierIndex, TIER_LABEL, TIER_MIN_PLAN_LABEL, type AnalyticsTier } from "@/lib/plan-tier";
@@ -48,7 +49,11 @@ export default async function EstadisticasPage({
 }: {
   searchParams: Promise<{ tab?: string }>;
 }) {
-  const tenant = await getTenant();
+  const actor = await getActor();
+  // ADR-0013 (Fase D) — Estadísticas es exclusiva del Manager (defensa en
+  // profundidad; el proxy ya la rechaza para un Colaborador que entre por URL).
+  if (actor.rol !== "manager") redirect("/panel");
+  const tenant = actor.tenant;
   const tier = getAnalyticsTier(tenant.plan);
   const tab = (((await searchParams).tab) ?? "resumen") as TabKey;
   const validTab: TabKey = tab in TAB_TIER ? tab : "resumen";

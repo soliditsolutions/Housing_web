@@ -1,14 +1,15 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
-import { getTenant, getContratos } from "@/lib/queries";
+import { getActor, getContratos, propiedadIdsVisibles } from "@/lib/queries";
 import { PageTitle } from "@/components/panel/ui";
 import { ContratosClient } from "./contratos-client";
 
 export const dynamic = "force-dynamic";
 
 export default async function ContratosPage() {
-  const tenant = await getTenant();
-  const contratos = await getContratos(tenant.id);
+  const actor = await getActor();
+  const propiedadIds = await propiedadIdsVisibles(actor);
+  const contratos = await getContratos(actor.tenantId, propiedadIds);
 
   return (
     <>

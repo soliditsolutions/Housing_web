@@ -31,7 +31,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/panel",
 }));
 
-const PRIMARY_LABELS   = ["Resumen", "Propiedades", "Contratos", "Cobros", "Estadísticas", "Vouchers", "Notificaciones"];
+const PRIMARY_LABELS   = ["Resumen", "Propiedades", "Contratos", "Cobros", "Vouchers", "Notificaciones"];
 const SECONDARY_LABELS = ["Ir al inicio", "Mi perfil"];
 
 // Helper: texto visible o aria-label del elemento
@@ -108,6 +108,23 @@ describe("Nav — ítem Equipo solo para manager (ADR-0013)", () => {
     const iPerfil = labels.findIndex((t) => t.includes("Mi perfil"));
     expect(iEquipo).toBeGreaterThan(iInicio);
     expect(iEquipo).toBeLessThan(iPerfil);
+  });
+});
+
+describe("Nav — ítem Estadísticas solo para manager (ADR-0013, Fase D)", () => {
+  it("sin isManager, el link de Estadísticas NO aparece", () => {
+    render(<Nav />);
+    expect(screen.queryByText("Estadísticas")).not.toBeInTheDocument();
+  });
+
+  it("con isManager=true, el link de Estadísticas aparece entre Cobros y Vouchers", () => {
+    const { container } = render(<Nav isManager={true} />);
+    const labels = Array.from(container.querySelectorAll("a")).map(textOrLabel);
+    const iCobros = labels.findIndex((t) => t.includes("Cobros"));
+    const iEstadisticas = labels.findIndex((t) => t.includes("Estadísticas"));
+    const iVouchers = labels.findIndex((t) => t.includes("Vouchers"));
+    expect(iEstadisticas).toBeGreaterThan(iCobros);
+    expect(iEstadisticas).toBeLessThan(iVouchers);
   });
 });
 

@@ -63,6 +63,29 @@ export async function getTenant(): Promise<Tenant> {
 }
 
 /**
+ * ADR-0013 (Fase D) — ids de `Propiedad` visibles para el actor.
+ *
+ * Devuelve `null` si el actor es `manager` (sin filtro — ve el 100% del
+ * tenant, comportamiento histórico sin cambios). Para un `colaborador`
+ * devuelve la lista de ids con `asignadoAId === actor.usuarioId` (puede ser
+ * vacía si no tiene nada asignado).
+ *
+ * Los call sites deben tratar `null` como "no agregar filtro" y un array
+ * (incluso vacío) como "agregar `id: { in: propiedadIds }`" (o el equivalente
+ * `contrato: { propiedadId: { in: propiedadIds } }` en modelos que cuelgan de
+ * `Contrato`, ya que `PeriodoPago`/`Voucher`/`Notificacion` no tienen FK
+ * directa a `Propiedad`).
+ */
+export async function propiedadIdsVisibles(actor: Actor): Promise<string[] | null> {
+  if (actor.rol === "manager") return null;
+  const props = await withTenant(actor.tenantId, (tx) => tx.propiedad.findMany({
+    where:  { tenantId: actor.tenantId, asignadoAId: actor.usuarioId },
+    select: { id: true },
+  }));
+  return props.map((p) => p.id);
+}
+
+/**
  * Devuelve todos los tenants activos ordenados por fecha de creación.
  *
  * Uso EXCLUSIVO para operaciones de sistema sin sesión de usuario:
@@ -147,9 +170,9 @@ export async function getResumen(tenantId: string) {
   });
 }
 
-export async function getContratos(tenantId: string) {
+export async function getContratos(tenantId: string, propiedadIds?: string[] | null) {
   const rows = await withTenant(tenantId, (tx) => tx.contrato.findMany({
-    where: { tenantId },
+    where: { tenantId, ...(propiedadIds ? { propiedadId: { in: propiedadIds } } : {}) },
     orderBy: { createdAt: "desc" },
     include: {
       propiedad: { select: { direccion: true, comuna: true } },
@@ -259,11 +282,15 @@ export async function marcarPeriodosAtrasados(tenantId: string): Promise<void> {
   return withTenant(tenantId, (tx) => marcarPeriodosAtrasadosTx(tx, tenantId));
 }
 
-export async function getPeriodosPendientes(tenantId: string) {
+export async function getPeriodosPendientes(tenantId: string, propiedadIds?: string[] | null) {
   return withTenant(tenantId, async (tx) => {
     await marcarPeriodosAtrasadosTx(tx, tenantId);
     const rows = await tx.periodoPago.findMany({
-      where: { tenantId, estado: { in: ["pendiente", "atrasado", "en_revision"] } },
+      where: {
+        tenantId, estado: { in: ["pendiente", "atrasado", "en_revision"] },
+        // PeriodoPago no tiene FK directa a Propiedad — filtra vía Contrato.
+        ...(propiedadIds ? { contrato: { propiedadId: { in: propiedadIds } } } : {}),
+      },
       orderBy: { fechaVencimiento: "asc" },
       include: {
         ajustes: { select: { id: true, tipo: true, montoCLP: true, descripcion: true } },
@@ -423,9 +450,16 @@ export type NotificacionItem = {
   propiedad: { direccion: string } | null;
 };
 
-export async function getNotificaciones(tenantId: string): Promise<NotificacionItem[]> {
+export async function getNotificaciones(tenantId: string, propiedadIds?: string[] | null): Promise<NotificacionItem[]> {
   const rows = await withTenant(tenantId, (tx) => tx.notificacion.findMany({
-    where: { tenantId },
+    where: {
+      tenantId,
+      // Notificacion no tiene FK directa a Propiedad y contratoId es opcional
+      // (puede ser null) — para un Colaborador, una notificación sin contrato
+      // no tiene dueño identificable, así que queda excluida (relation filter
+      // sobre un campo nullable ya descarta null de forma implícita).
+      ...(propiedadIds ? { contrato: { propiedadId: { in: propiedadIds } } } : {}),
+    },
     orderBy: { createdAt: "desc" },
     take: 100,
     include: {
@@ -445,8 +479,13 @@ export async function getNotificaciones(tenantId: string): Promise<NotificacionI
   }));
 }
 
-export async function getNotificacionCount(tenantId: string) {
-  return withTenant(tenantId, (tx) => tx.notificacion.count({ where: { tenantId, estado: "pendiente" } }));
+export async function getNotificacionCount(tenantId: string, propiedadIds?: string[] | null) {
+  return withTenant(tenantId, (tx) => tx.notificacion.count({
+    where: {
+      tenantId, estado: "pendiente",
+      ...(propiedadIds ? { contrato: { propiedadId: { in: propiedadIds } } } : {}),
+    },
+  }));
 }
 
 type VoucherFiltros = {
@@ -466,12 +505,18 @@ export type VoucherItem = {
   propiedad: { direccion: string; comuna: string | null };
 };
 
-export async function getVouchers(tenantId: string, filtros: VoucherFiltros = {}): Promise<VoucherItem[]> {
+export async function getVouchers(
+  tenantId: string,
+  filtros: VoucherFiltros = {},
+  propiedadIds?: string[] | null,
+): Promise<VoucherItem[]> {
   const rows = await withTenant(tenantId, (tx) => tx.voucher.findMany({
     where: {
       tenantId,
       ...(filtros.tipo ? { tipo: filtros.tipo } : {}),
       ...(filtros.contratoId ? { contratoId: filtros.contratoId } : {}),
+      // Voucher no tiene FK directa a Propiedad — filtra vía Contrato.
+      ...(propiedadIds ? { contrato: { propiedadId: { in: propiedadIds } } } : {}),
       ...(filtros.desde || filtros.hasta
         ? {
             fecha: {
@@ -498,9 +543,9 @@ export async function getVouchers(tenantId: string, filtros: VoucherFiltros = {}
   }));
 }
 
-export async function getContratosSelect(tenantId: string): Promise<{ id: string; label: string }[]> {
+export async function getContratosSelect(tenantId: string, propiedadIds?: string[] | null): Promise<{ id: string; label: string }[]> {
   const rows = await withTenant(tenantId, (tx) => tx.contrato.findMany({
-    where: { tenantId },
+    where: { tenantId, ...(propiedadIds ? { propiedadId: { in: propiedadIds } } : {}) },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
@@ -511,9 +556,9 @@ export async function getContratosSelect(tenantId: string): Promise<{ id: string
   return rows.map((c) => ({ id: c.id, label: `${c.propiedad.direccion} — ${c.arrendatario.nombre}` }));
 }
 
-export async function getPropiedades(tenantId: string) {
+export async function getPropiedades(tenantId: string, propiedadIds?: string[] | null) {
   const rows = await withTenant(tenantId, (tx) => tx.propiedad.findMany({
-    where: { tenantId },
+    where: { tenantId, ...(propiedadIds ? { id: { in: propiedadIds } } : {}) },
     orderBy: { createdAt: "desc" },
     include: {
       propietario: { select: { nombre: true, email: true, rut: true } },

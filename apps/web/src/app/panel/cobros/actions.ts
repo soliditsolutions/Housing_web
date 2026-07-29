@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getTenant } from "@/lib/queries";
+import { getActor } from "@/lib/queries";
 import { withTenant } from "@/lib/tenant-db";
 import { logError } from "@/lib/logger";
 import {
@@ -45,7 +45,8 @@ export async function simularPago(
     return { ok: false, error: "Fecha inválida." };
   }
   try {
-    const tenant = await getTenant();
+    const actor  = await getActor();
+    const tenant = actor.tenant;
     const fechaPagoReal = new Date(fechaPagoRealStr + "T00:00:00Z");
 
     const resultado = await withTenant(tenant.id, async (tx) => {
@@ -63,6 +64,7 @@ export async function simularPago(
               comisionCorredorPct: true, cobraGastoComun: true,
               arrendatarioId: true, propietarioId: true,
               reajuste: true, fechaInicio: true,
+              propiedad: { select: { asignadoAId: true } },
             },
           },
         },
@@ -72,6 +74,9 @@ export async function simularPago(
           "El período no existe, no pertenece a este corredor, o ya fue procesado.",
         );
       }
+      // ADR-0013 (Fase D) — un Colaborador solo concilia pagos de sus propias propiedades.
+      if (actor.rol !== "manager" && periodo.contrato.propiedad.asignadoAId !== actor.usuarioId)
+        throw new DomainError("No tienes acceso a este período de pago.");
 
       const c = periodo.contrato;
 
@@ -309,7 +314,8 @@ export async function cerrarLiquidacion(
     }
   }
   try {
-    const tenant = await getTenant();
+    const actor  = await getActor();
+    const tenant = actor.tenant;
 
     const resultado = await withTenant(tenant.id, async (tx) => {
       // BL-RC2: Carga y reverifica el estado DENTRO de la TX.
@@ -320,6 +326,7 @@ export async function cerrarLiquidacion(
             select: {
               id: true, denominacion: true, comisionCorredorPct: true,
               arrendatarioId: true, propietarioId: true,
+              propiedad: { select: { asignadoAId: true } },
             },
           },
         },
@@ -329,6 +336,9 @@ export async function cerrarLiquidacion(
           "El período no existe, no pertenece a este corredor, o ya fue liquidado.",
         );
       }
+      // ADR-0013 (Fase D) — un Colaborador solo cierra liquidaciones de sus propias propiedades.
+      if (actor.rol !== "manager" && periodo.contrato.propiedad.asignadoAId !== actor.usuarioId)
+        throw new DomainError("No tienes acceso a este período de pago.");
 
       const c = periodo.contrato;
 

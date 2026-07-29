@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getTenant, marcarPeriodosAtrasados } from "@/lib/queries";
+import { getActor, marcarPeriodosAtrasados, propiedadIdsVisibles } from "@/lib/queries";
 import { withTenant } from "@/lib/tenant-db";
 import { sendNotificacionEmail } from "@/lib/email";
 import { logError } from "@/lib/logger";
@@ -34,7 +34,12 @@ export async function generarRecordatorios(tenantOverride?: Tenant): Promise<{
 }> {
   try {
     const HOY = hoyUTC();
-    const tenant = tenantOverride ?? await getTenant();
+    // tenantOverride = llamada del cron de sistema, sin sesión de usuario — sin
+    // filtro por colaborador (procesa todo el tenant). Desde el panel, un
+    // Colaborador solo genera recordatorios de sus propias propiedades (Fase D).
+    const actor  = tenantOverride ? null : await getActor();
+    const tenant = tenantOverride ?? actor!.tenant;
+    const propiedadIds = actor ? await propiedadIdsVisibles(actor) : null;
     const diasAntes  = tenant.recordatorioDiasAntes;  // default 5
     const ventana    = tenant.ventanaLiquidacionDias;  // default 10
 
@@ -49,6 +54,7 @@ export async function generarRecordatorios(tenantOverride?: Tenant): Promise<{
         where: {
           tenantId: tenant.id,
           estado: { in: ["pendiente", "atrasado", "pagado"] },
+          ...(propiedadIds ? { contrato: { propiedadId: { in: propiedadIds } } } : {}),
         },
         include: {
           contrato: {
@@ -201,12 +207,17 @@ export async function enviarNotificacionesPendientes(tenantOverride?: Tenant): P
   sinEmail: number;
 }> {
   try {
-    const tenant = tenantOverride ?? await getTenant();
+    const actor  = tenantOverride ? null : await getActor();
+    const tenant = tenantOverride ?? actor!.tenant;
+    const propiedadIds = actor ? await propiedadIdsVisibles(actor) : null;
 
     // Lectura en su propia transacción corta — no mantenemos abierta una
     // transacción mientras esperamos el I/O externo de envío de email más abajo.
     const pendientes = await withTenant(tenant.id, (tx) => tx.notificacion.findMany({
-      where: { tenantId: tenant.id, estado: "pendiente", canal: "email" },
+      where: {
+        tenantId: tenant.id, estado: "pendiente", canal: "email",
+        ...(propiedadIds ? { contrato: { propiedadId: { in: propiedadIds } } } : {}),
+      },
       include: {
         persona: { select: { nombre: true, email: true } },
       },
@@ -251,11 +262,25 @@ export async function enviarNotificacionesPendientes(tenantOverride?: Tenant): P
 /** Marcar una notificación como "simulada" (enviada en MVP). */
 export async function marcarSimulada(id: string): Promise<{ ok: boolean }> {
   try {
-    const tenant = await getTenant();
-    await withTenant(tenant.id, (tx) => tx.notificacion.update({
-      where: { id, tenantId: tenant.id },
-      data: { estado: "simulada", enviadaEn: new Date() },
-    }));
+    const actor = await getActor();
+    await withTenant(actor.tenantId, async (tx) => {
+      // ADR-0013 (Fase D) — un Colaborador solo actúa sobre notificaciones de
+      // sus propias propiedades; una sin contrato asociado no tiene dueño
+      // identificable, así que queda fuera de su alcance.
+      if (actor.rol !== "manager") {
+        const notif = await tx.notificacion.findFirst({
+          where: { id, tenantId: actor.tenantId },
+          select: { contrato: { select: { propiedad: { select: { asignadoAId: true } } } } },
+        });
+        if (!notif || notif.contrato?.propiedad.asignadoAId !== actor.usuarioId) {
+          throw new Error("No tienes acceso a esta notificación.");
+        }
+      }
+      await tx.notificacion.update({
+        where: { id, tenantId: actor.tenantId },
+        data: { estado: "simulada", enviadaEn: new Date() },
+      });
+    });
     revalidatePath("/panel/notificaciones");
     return { ok: true };
   } catch {
@@ -266,9 +291,13 @@ export async function marcarSimulada(id: string): Promise<{ ok: boolean }> {
 /** Marcar todas las notificaciones pendientes como "simuladas". */
 export async function simularEnvioMasivo(): Promise<{ ok: boolean; enviadas: number }> {
   try {
-    const tenant = await getTenant();
-    const { count } = await withTenant(tenant.id, (tx) => tx.notificacion.updateMany({
-      where: { tenantId: tenant.id, estado: "pendiente" },
+    const actor = await getActor();
+    const propiedadIds = await propiedadIdsVisibles(actor);
+    const { count } = await withTenant(actor.tenantId, (tx) => tx.notificacion.updateMany({
+      where: {
+        tenantId: actor.tenantId, estado: "pendiente",
+        ...(propiedadIds ? { contrato: { propiedadId: { in: propiedadIds } } } : {}),
+      },
       data: { estado: "simulada", enviadaEn: new Date() },
     }));
     revalidatePath("/panel/notificaciones");

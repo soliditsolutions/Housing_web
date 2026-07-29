@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { randomUUID } from "crypto";
-import { getTenant, getUfCLPTx } from "@/lib/queries";
+import { getActor, getUfCLPTx, type Actor } from "@/lib/queries";
 import { withTenant } from "@/lib/tenant-db";
 import { generarCalendario, type PeriodoCalendario } from "@housing/core";
 import { esc } from "@/lib/html";
@@ -20,6 +20,12 @@ class DomainError extends Error {
   constructor(msg: string) { super(msg); this.name = "DomainError"; }
 }
 
+/** ADR-0013 (Fase D) — un Colaborador solo actúa sobre contratos de propiedades que tiene asignadas. */
+function verificarOwnershipContrato(actor: Actor, asignadoAId: string | null): void {
+  if (actor.rol !== "manager" && asignadoAId !== actor.usuarioId)
+    throw new DomainError("No tienes acceso a este contrato.");
+}
+
 /**
  * Activa un contrato borrador → vigente.
  * Verifica tenant, estado y actualiza tanto el contrato como la propiedad.
@@ -28,18 +34,20 @@ export async function activarContrato(contratoId: string): Promise<ResultadoOk> 
   if (!contratoId)
     return { ok: false, error: "ID de contrato requerido." };
   try {
-    const tenant = await getTenant();
+    const actor  = await getActor();
+    const tenant = actor.tenant;
 
     await withTenant(tenant.id, async (tx) => {
       /* Verificar que el contrato pertenece al tenant y está en borrador */
       const contrato = await tx.contrato.findFirst({
         where: { id: contratoId, tenantId: tenant.id, estado: "borrador" },
-        select: { propiedadId: true, arrendatarioId: true },
+        select: { propiedadId: true, arrendatarioId: true, propiedad: { select: { asignadoAId: true } } },
       });
       if (!contrato)
         throw new DomainError(
           "El contrato no existe, no pertenece a este corredor, o ya fue activado.",
         );
+      verificarOwnershipContrato(actor, contrato.propiedad.asignadoAId);
 
       /* Contrato → vigente + token de valoración (único, para uso posterior del arrendatario) */
       await tx.contrato.update({
@@ -98,7 +106,8 @@ export async function terminarContrato(
   const montoRetencion = Math.round(Math.max(0, opts.montoRetencion));
 
   try {
-    const tenant = await getTenant();
+    const actor  = await getActor();
+    const tenant = actor.tenant;
 
     await withTenant(tenant.id, async (tx) => {
       /* Verificar que existe, pertenece al tenant y está vigente */
@@ -107,12 +116,14 @@ export async function terminarContrato(
         select: {
           propiedadId: true, arrendatarioId: true, propietarioId: true,
           garantiaDenominacion: true, garantiaMontoBase: true, garantiaMontoCLP: true,
+          propiedad: { select: { asignadoAId: true } },
         },
       });
       if (!contrato)
         throw new DomainError(
           "El contrato no existe, no pertenece a este corredor, o no está vigente.",
         );
+      verificarOwnershipContrato(actor, contrato.propiedad.asignadoAId);
 
       // BL-DATE1: Date.UTC evita que hoy difiera según el timezone del servidor.
       const _ahora = new Date();
@@ -274,14 +285,16 @@ export async function adjuntarAnexo(
     return { ok: false, error: "Archivo no válido." };
 
   try {
-    const tenant = await getTenant();
+    const actor  = await getActor();
+    const tenant = actor.tenant;
 
     const doc = await withTenant(tenant.id, async (tx) => {
       const contrato = await tx.contrato.findFirst({
         where: { id: contratoId, tenantId: tenant.id },
-        select: { id: true },
+        select: { id: true, propiedad: { select: { asignadoAId: true } } },
       });
       if (!contrato) throw new DomainError("Contrato no encontrado.");
+      verificarOwnershipContrato(actor, contrato.propiedad.asignadoAId);
 
       return tx.documento.create({
         data: {
@@ -317,7 +330,8 @@ export async function generarReconocimientoDeuda(
   if (!contratoId) return { ok: false, error: "ID de contrato requerido." };
 
   try {
-    const tenant = await getTenant();
+    const actor  = await getActor();
+    const tenant = actor.tenant;
 
     const contrato = await withTenant(tenant.id, (tx) => tx.contrato.findFirst({
       where: { id: contratoId, tenantId: tenant.id },
@@ -325,7 +339,7 @@ export async function generarReconocimientoDeuda(
         id: true, denominacion: true, valorArriendo: true,
         arrendatario: { select: { nombre: true, rut: true, email: true } },
         propietario:  { select: { nombre: true, rut: true } },
-        propiedad:    { select: { direccion: true, comuna: true } },
+        propiedad:    { select: { direccion: true, comuna: true, asignadoAId: true } },
         arrendatarioId: true, propietarioId: true,
         periodos: {
           where: { estado: { in: ["atrasado", "pendiente"] } },
@@ -339,6 +353,8 @@ export async function generarReconocimientoDeuda(
     }));
 
     if (!contrato) return { ok: false, error: "Contrato no encontrado." };
+    if (actor.rol !== "manager" && contrato.propiedad.asignadoAId !== actor.usuarioId)
+      return { ok: false, error: "No tienes acceso a este contrato." };
 
     const periodosDeuda = contrato.periodos.filter(
       (p) => p.estado === "atrasado" || (p.estado === "pendiente" && p.fechaVencimiento < new Date()),
@@ -479,7 +495,8 @@ export async function renovarContrato(
     return { ok: false, error: "El nuevo valor de arriendo debe ser mayor a 0." };
 
   try {
-    const tenant = await getTenant();
+    const actor  = await getActor();
+    const tenant = actor.tenant;
 
     await withTenant(tenant.id, async (tx) => {
       /* 1. Verificar contrato: vigente, con fechaFin, pertenece al tenant */
@@ -493,12 +510,14 @@ export async function renovarContrato(
           denominacion:    true,
           cobraGastoComun: true,
           arrendatarioId:  true,
+          propiedad:       { select: { asignadoAId: true } },
         },
       });
       if (!contrato)
         throw new DomainError(
           "El contrato no existe, no está vigente o no pertenece a este corredor.",
         );
+      verificarOwnershipContrato(actor, contrato.propiedad.asignadoAId);
       if (!contrato.fechaFin)
         throw new DomainError(
           "Solo se pueden renovar contratos a plazo fijo (con fecha de término definida).",
@@ -616,18 +635,20 @@ export async function cancelarContratoBorrador(contratoId: string): Promise<Resu
   if (!contratoId)
     return { ok: false, error: "ID de contrato requerido." };
   try {
-    const tenant = await getTenant();
+    const actor  = await getActor();
+    const tenant = actor.tenant;
 
     await withTenant(tenant.id, async (tx) => {
       /* Verificar que existe, pertenece al tenant y está en borrador */
       const contrato = await tx.contrato.findFirst({
         where: { id: contratoId, tenantId: tenant.id, estado: "borrador" },
-        select: { propiedadId: true },
+        select: { propiedadId: true, propiedad: { select: { asignadoAId: true } } },
       });
       if (!contrato)
         throw new DomainError(
           "El contrato no existe, no pertenece a este corredor, o ya fue activado/terminado.",
         );
+      verificarOwnershipContrato(actor, contrato.propiedad.asignadoAId);
 
       // BL-DATE1: Date.UTC evita que hoy difiera según el timezone del servidor.
       const _ahora = new Date();

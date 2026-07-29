@@ -1,7 +1,7 @@
 # ADR-0013 — Cuentas multi-usuario (Manager / Collaborator)
 
-- **Fecha**: 2026-07-27 (diseño) / 2026-07-28 (Fase A) / 2026-07-29 (Fases B y C)
-- **Estado**: Aceptada — Fases A, B y C completas; D y E pendientes
+- **Fecha**: 2026-07-27 (diseño) / 2026-07-28 (Fase A) / 2026-07-29 (Fases B, C y D)
+- **Estado**: Aceptada — Fases A, B, C y D completas; E pendiente
 
 ## Contexto
 
@@ -54,9 +54,22 @@ Hasta ahora cada `Tenant` (la cuenta de la corredora) podía tener uno o más `U
 
 - Los datos de seed (`prisma/seed.ts`) guardaban `region: "Metropolitana"` / `"La Araucanía"` — nombres informales que no coinciden con la lista canónica de 16 regiones (`Región Metropolitana de Santiago` / `Región de la Araucanía`) introducida en un trabajo anterior (validación backend contra lista cerrada). Cualquier edición de una propiedad sembrada fallaba silenciosamente la validación de región. Corregido en `seed.ts` (para futuros seeds) y con un `UPDATE` puntual sobre las filas ya sembradas en la BD de desarrollo.
 
-### Fases pendientes
+### Fase D (implementada 2026-07-29) — cascada de filtrado
 
-D (cascada de filtrado por módulo: Propiedades/Contratos/Cobros/Vouchers/Notificaciones/Estadísticas para que un Collaborator solo vea lo asignado), E (cupos por plan). Ver el plan de implementación original para el detalle de cada una.
+- `queries.ts`: nuevo helper `propiedadIdsVisibles(actor): Promise<string[] | null>` — `null` para `rol === "manager"` (sin filtro, ve todo el tenant), o el array (posiblemente vacío) de `Propiedad.id` con `asignadoAId === actor.usuarioId` para un Colaborador. Cada llamador hace spread condicional del `where` (`...(propiedadIds ? {propiedadId: {in: propiedadIds}} : {})`).
+- **Dos formas de filtro según el modelo**: `Propiedad` y `Contrato` tienen FK directa (`id`/`propiedadId`), filtro directo. `PeriodoPago`, `Voucher` y `Notificacion` no tienen `propiedadId` propio — solo `Contrato` lo tiene — así que usan el filtro de relación anidada de Prisma: `contrato: { propiedadId: { in: propiedadIds } }`. Para `Notificacion` (cuyo `contratoId` es nullable) esto excluye implícitamente, para un Colaborador, las notificaciones sin contrato asociado — correcto, porque una notificación sin contrato no tiene dueño identificable.
+- **Guard de ownership reutilizable** en `contratos/[id]/actions.ts`: `verificarOwnershipContrato(actor, asignadoAId)` — lanza `DomainError` si el actor es Colaborador y la propiedad del contrato no es la suya. Se reutiliza en `activarContrato`, `terminarContrato`, `adjuntarAnexo`, `renovarContrato` y `cancelarContratoBorrador`; `generarReconocimientoDeuda` usa el equivalente inline por no compartir el mismo patrón `try/catch DomainError`.
+- **Un Colaborador SÍ puede crear contratos** (a diferencia de propiedades, que son Manager-only) pero solo sobre propiedades que le pertenecen — verificado en `crearContrato` comparando `asignadoAId` contra `actor.usuarioId`.
+- **Estadísticas: exclusiva del Manager, sin recorte por propiedad.** Decisión tomada explícitamente con el usuario (2026-07-29) tras plantear la disyuntiva: escalar las ~25 queries de los 4 módulos de Estadísticas (turnover%, retención%, valoración promedio, comparables de mercado) a un subconjunto de propiedades de un Colaborador no produce métricas significativas (ratios de cartera calculados sobre 1-2 propiedades son ruido, no BI). Se optó por ocultarla enteramente para el Colaborador en 4 capas: `nav.tsx` (ítem no se monta, mismo criterio que "Equipo"), `proxy.ts` (redirect a `/panel` por `session.rol`), `estadisticas/page.tsx` (`redirect` de defensa en profundidad vía `getActor()`), y la ruta de exportación CSV `/api/panel/estadisticas/exportar/route.ts` (guard inline, porque esta ruta **no** está cubierta por el matcher `/panel/:path*` de `proxy.ts` — cualquier gateo Manager-only sobre rutas `/api/panel/*` debe hacerse en el propio handler).
+- **Decisiones de alcance confirmadas con el usuario** antes de implementar: (1) un Colaborador nunca crea propiedades, solo el Manager; (2) el filtro sobre Contratos es lectura + escritura completas desde ya (no solo lectura); (3) Estadísticas exclusiva del Manager (ver punto anterior).
+- **Resumen (dashboard raíz `/panel`) queda fuera de alcance a propósito** — la decisión original ("El filtro cascadea a Propiedades, Contratos, Cobros, Vouchers, Notificaciones y Estadísticas") nunca nombra el dashboard raíz; `getResumen()` sigue mostrando totales de todo el tenant también a un Colaborador. Verificado en navegador (no es un olvido): no se toca en esta fase.
+- Módulos con el mismo patrón cascada aplicado: Propiedades (filtrar lista + Manager-only en crear + ownership en editar/activar/desactivar), Contratos (filtrar lista/detalle con `notFound()` ante IDOR + ownership en las 6 actions), Cobros (filtrar lista + ownership en `simularPago`/`cerrarLiquidacion`), Vouchers (filtrar lista), Notificaciones (filtrar lista + ownership en `marcarSimulada` + filtro en el `updateMany` de `simularEnvioMasivo`; el cron `/api/cron/recordatorios` sigue sin filtro vía `tenantOverride`, procesa todo el tenant como corresponde a un job de sistema sin sesión de usuario).
+- Cobertura de tests nueva/actualizada: `propiedades-actions.test.ts` (26 casos), `contratos/[id]/__tests__/contrato-ownership.test.ts` (nuevo, 5 casos), `cobros-actions.test.ts` (13 casos, migrado de mock `getTenant`→`getActor`), `nav.test.tsx` (gating de Estadísticas).
+- Verificación en navegador: María (manager) ve las 4 propiedades y todos los módulos sin cambios; Pedro (colaborador) con 0 propiedades asignadas ve estados vacíos en todos los módulos filtrados sin crashear (incluida la generación batch de recordatorios) y es redirigido de `/panel/estadisticas`; con 1 propiedad asignada, Propiedades muestra exactamente esa; intentar acceder por URL directa a un contrato de una propiedad no asignada devuelve un 404 limpio (`notFound()`), sin filtrar datos del contrato — protección IDOR confirmada.
+
+### Fase pendiente
+
+E (cupos por plan). Ver el plan de implementación original para el detalle.
 
 ## Alternativas consideradas
 
@@ -68,4 +81,4 @@ D (cascada de filtrado por módulo: Propiedades/Contratos/Cobros/Vouchers/Notifi
 
 - Todo código nuevo que necesite "quién soy y qué tenant" debe usar `getActor()`, no re-implementar la lectura de sesión — hereda gratis la verificación de usuario desactivado.
 - Cualquier futuro chequeo de autorización que pueda terminar en "cerrar sesión" debe vivir en una Server Action, Route Handler, o un Server Component que redirija a una de esas dos (nunca intentar mutar cookies directamente en un layout/page).
-- Fases D-E quedan pendientes — con B y C implementadas, un Manager ya puede invitar/desactivar/reactivar colaboradores y asignarles propiedades de punta a punta; lo único que falta es que esa asignación efectivamente filtre lo que un Collaborator ve (Fase D) y los cupos por plan (Fase E).
+- Fase E queda pendiente (cupos por plan) — con A-D implementadas, el ciclo completo Manager→invita→asigna propiedad→Collaborator ve/gestiona solo lo suyo ya funciona de punta a punta, incluida la protección IDOR a nivel de Server Action y de página.

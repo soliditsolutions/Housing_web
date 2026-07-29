@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, FileText, ShieldCheck, AlertTriangle } from "lucide-react";
-import { getTenant, getContratoDetalle } from "@/lib/queries";
+import { getActor, getContratoDetalle } from "@/lib/queries";
 import { clp, num, fecha } from "@/lib/format";
 import { Badge, Card, estadoTone, estadoPulse, estadoLabel, PageTitle } from "@/components/panel/ui";
 import { TabNav } from "@/components/panel/tab-nav";
@@ -50,12 +50,19 @@ export default async function ContratoDetallePage({
   searchParams: Promise<{ tab?: string }>;
 }) {
   const { id } = await params;
-  const tenant = await getTenant();
+  const actor  = await getActor();
+  const tenant = actor.tenant;
 
   let detalle;
   try {
     detalle = await getContratoDetalle(tenant.id, id);
   } catch {
+    notFound();
+  }
+
+  // ADR-0013 (Fase D) — un Colaborador solo ve contratos de propiedades que
+  // tiene asignadas; mismo trato que "no existe" (ROL-SEC-2), no un error.
+  if (actor.rol !== "manager" && detalle.propiedad.asignadoAId !== actor.usuarioId) {
     notFound();
   }
 

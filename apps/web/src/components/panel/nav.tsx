@@ -10,10 +10,15 @@ const items = [
   { href: "/panel/propiedades",    label: "Propiedades",    icon: Building2       },
   { href: "/panel/contratos",      label: "Contratos",      icon: FileText        },
   { href: "/panel/cobros",         label: "Cobros",         icon: Wallet          },
-  { href: "/panel/estadisticas",   label: "Estadísticas",   icon: BarChart3       },
   { href: "/panel/vouchers",       label: "Vouchers",       icon: ReceiptText     },
   { href: "/panel/notificaciones", label: "Notificaciones", icon: Bell            },
 ];
+
+// ADR-0013 (Fase D) — Estadísticas es business intelligence de cartera
+// completa (turnover, retención, comparables de mercado); no se recorta por
+// propiedad asignada, así que directamente se oculta para el Colaborador
+// (igual criterio que "Equipo"). El proxy la rechaza si entra por URL directa.
+const itemEstadisticas = { href: "/panel/estadisticas", label: "Estadísticas", icon: BarChart3 };
 
 const itemsSecundarios = [
   { href: "/",             label: "Ir al inicio", icon: House   },
@@ -77,6 +82,9 @@ function NavLink({
 
 export function Nav({ collapsed = false, isManager = false }: { collapsed?: boolean; isManager?: boolean }) {
   const path = usePathname();
+  const primarios = isManager
+    ? [...items.slice(0, 4), itemEstadisticas, ...items.slice(4)]
+    : items;
   const secundarios = isManager
     ? [itemsSecundarios[0], itemEquipo, itemsSecundarios[1]]
     : itemsSecundarios;
@@ -90,7 +98,7 @@ export function Nav({ collapsed = false, isManager = false }: { collapsed?: bool
       {/* FIX UI-C6: navegación principal primero — lectores de pantalla recorren
           el DOM en orden; los ítems principales deben preceder a los secundarios. */}
       <div className="flex-1 space-y-0.5">
-        {items.map((it) => {
+        {primarios.map((it) => {
           const active =
             it.href === "/panel" ? path === it.href : path.startsWith(it.href);
           return (

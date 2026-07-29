@@ -47,6 +47,10 @@ const mockUsuarioFindFirst    = vi.fn();
 const mockAuditoriaCreate     = vi.fn();
 const mockImagenDeleteMany    = vi.fn().mockResolvedValue(undefined);
 const mockImagenCreateMany    = vi.fn().mockResolvedValue(undefined);
+const mockPublicacionFindFirst  = vi.fn();
+const mockPublicacionUpdate     = vi.fn().mockResolvedValue({});
+const mockPublicacionCreate     = vi.fn().mockResolvedValue({});
+const mockPublicacionUpdateMany = vi.fn().mockResolvedValue({});
 
 // buscarOCrearPersona/crearPropiedad/actualizarPropiedad corren dentro de
 // withTenant() (ADR-0011): $transaction invoca el callback con un tx que
@@ -59,6 +63,7 @@ vi.mock("@/lib/db", () => {
     imagenPropiedad: { deleteMany: mockImagenDeleteMany, createMany: mockImagenCreateMany },
     usuario:         { findFirst: mockUsuarioFindFirst },
     auditoriaEquipo: { create: mockAuditoriaCreate },
+    publicacion:     { findFirst: mockPublicacionFindFirst, update: mockPublicacionUpdate, create: mockPublicacionCreate, updateMany: mockPublicacionUpdateMany },
   };
   return {
     prisma: {
@@ -70,7 +75,7 @@ vi.mock("@/lib/db", () => {
   };
 });
 
-const { buscarOCrearPersona, crearPropiedad, actualizarPropiedad } = await import("../actions");
+const { buscarOCrearPersona, crearPropiedad, actualizarPropiedad, activarPropiedad, desactivarPropiedad } = await import("../actions");
 
 // ── Suite ─────────────────────────────────────────────────────────────────────
 
@@ -214,11 +219,14 @@ describe("actualizarPropiedad — asignadoAId (ROL-UI-5 / ROL-SEC-3)", () => {
     mockAuditoriaCreate.mockResolvedValue({});
   });
 
-  it("rechaza server-side si un Colaborador intenta cambiar la asignación a otro valor", async () => {
-    mockGetActor.mockResolvedValue({ usuarioId: "colab-x", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
-    mockPropiedadFindFirst.mockResolvedValue({ id: "prop-1", asignadoAId: null });
+  it("rechaza server-side si un Colaborador intenta cambiar la asignación a otro valor (dueño de la propiedad)", async () => {
+    // ADR-0013 (Fase D): el chequeo de ownership exige que el actor sea el
+    // dueño actual para siquiera llegar a esta lógica — de lo contrario lo
+    // rechaza antes por "No tienes acceso" (ver test de Fase D más abajo).
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-1", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
+    mockPropiedadFindFirst.mockResolvedValue({ id: "prop-1", asignadoAId: "colab-1" });
 
-    const result = await actualizarPropiedad("prop-1", { ...DATA_EDITAR_BASE, asignadoAId: "colab-1" });
+    const result = await actualizarPropiedad("prop-1", { ...DATA_EDITAR_BASE, asignadoAId: "colab-2" });
 
     expect(result).toEqual({ ok: false, error: expect.stringMatching(/solo el administrador/i) });
     expect(mockPropiedadUpdate).not.toHaveBeenCalled();
@@ -226,7 +234,7 @@ describe("actualizarPropiedad — asignadoAId (ROL-UI-5 / ROL-SEC-3)", () => {
   });
 
   it("un Colaborador que reenvía el mismo asignadoAId actual (sin cambio real) no es bloqueado", async () => {
-    mockGetActor.mockResolvedValue({ usuarioId: "colab-x", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-1", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
     mockPropiedadFindFirst.mockResolvedValue({ id: "prop-1", asignadoAId: "colab-1" });
 
     const result = await actualizarPropiedad("prop-1", { ...DATA_EDITAR_BASE, asignadoAId: "colab-1" });
@@ -239,7 +247,7 @@ describe("actualizarPropiedad — asignadoAId (ROL-UI-5 / ROL-SEC-3)", () => {
   });
 
   it("el campo ausente (Colaborador — la UI no lo renderiza) deja la asignación intacta sin chequear rol", async () => {
-    mockGetActor.mockResolvedValue({ usuarioId: "colab-x", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-1", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
     mockPropiedadFindFirst.mockResolvedValue({ id: "prop-1", asignadoAId: "colab-1" });
 
     const result = await actualizarPropiedad("prop-1", { ...DATA_EDITAR_BASE }); // sin asignadoAId
@@ -249,6 +257,16 @@ describe("actualizarPropiedad — asignadoAId (ROL-UI-5 / ROL-SEC-3)", () => {
       expect.objectContaining({ data: expect.objectContaining({ asignadoAId: "colab-1" }) }),
     );
     expect(mockAuditoriaCreate).not.toHaveBeenCalled();
+  });
+
+  it("ADR-0013 (Fase D): rechaza si un Colaborador intenta editar una propiedad que NO tiene asignada", async () => {
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-x", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
+    mockPropiedadFindFirst.mockResolvedValue({ id: "prop-1", asignadoAId: "colab-1" }); // asignada a OTRO colaborador
+
+    const result = await actualizarPropiedad("prop-1", { ...DATA_EDITAR_BASE });
+
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/no tienes acceso/i) });
+    expect(mockPropiedadUpdate).not.toHaveBeenCalled();
   });
 
   it("el Manager asigna una propiedad a un colaborador válido — persiste y audita asignar_propiedad", async () => {
@@ -381,5 +399,68 @@ describe("crearPropiedad — asignadoAId (ROL-UI-5 / ROL-SEC-3)", () => {
       expect.objectContaining({ data: expect.objectContaining({ asignadoAId: null }) }),
     );
     expect(mockAuditoriaCreate).not.toHaveBeenCalled();
+  });
+});
+
+// ── ADR-0013 (Fase D) — un Colaborador crea, activa y desactiva solo lo suyo ────
+
+describe("crearPropiedad — exclusivo del Manager (Fase D)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("rechaza si un Colaborador intenta crear una propiedad (aunque no envíe asignadoAId)", async () => {
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-1", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
+
+    const result = await crearPropiedad({ ...DATA_CREAR_BASE });
+
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/solo el administrador/i) });
+    expect(mockPropiedadCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe("activarPropiedad / desactivarPropiedad — ownership (Fase D)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPropiedadUpdate.mockResolvedValue({});
+  });
+
+  it("desactivarPropiedad rechaza si el Colaborador no es el dueño asignado", async () => {
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-x", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
+    mockPropiedadFindFirst.mockResolvedValue({ id: "prop-1", asignadoAId: "colab-1", direccion: "Calle 1" });
+
+    const result = await desactivarPropiedad("prop-1");
+
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/no tienes acceso/i) });
+    expect(mockPropiedadUpdate).not.toHaveBeenCalled();
+  });
+
+  it("desactivarPropiedad permite al Colaborador dueño de la propiedad", async () => {
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-1", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
+    mockPropiedadFindFirst.mockResolvedValue({ id: "prop-1", asignadoAId: "colab-1", direccion: "Calle 1" });
+
+    const result = await desactivarPropiedad("prop-1");
+
+    expect(result).toEqual({ ok: true });
+    expect(mockPropiedadUpdate).toHaveBeenCalled();
+  });
+
+  it("activarPropiedad rechaza si el Colaborador no es el dueño asignado", async () => {
+    mockGetActor.mockResolvedValue({ usuarioId: "colab-x", tenantId: "tenant-abc", rol: "colaborador", tenant: {} });
+    mockPropiedadFindFirst.mockResolvedValue({ id: "prop-1", asignadoAId: "colab-1", direccion: "Calle 1" });
+
+    const result = await activarPropiedad("prop-1");
+
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/no tienes acceso/i) });
+    expect(mockPropiedadUpdate).not.toHaveBeenCalled();
+  });
+
+  it("activarPropiedad permite al Manager sobre cualquier propiedad del tenant", async () => {
+    mockGetActor.mockResolvedValue({ usuarioId: "mgr-1", tenantId: "tenant-abc", rol: "manager", tenant: {} });
+    mockPropiedadFindFirst.mockResolvedValue({ id: "prop-1", asignadoAId: "colab-1", direccion: "Calle 1" });
+    mockPublicacionFindFirst.mockResolvedValue(null);
+
+    const result = await activarPropiedad("prop-1");
+
+    expect(result).toEqual({ ok: true });
+    expect(mockPropiedadUpdate).toHaveBeenCalled();
   });
 });

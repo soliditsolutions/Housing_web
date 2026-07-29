@@ -208,6 +208,11 @@ export async function crearPropiedad(data: {
 
   try {
     const actor = await getActor();
+    // ADR-0013 (Fase D) — un Colaborador gestiona lo que se le asigna, no crea
+    // inventario nuevo (evita además la trampa de UX de crear una propiedad
+    // que nace sin asignar y que su propio creador ya no podría ver).
+    if (actor.rol !== "manager")
+      return { ok: false, error: "Solo el administrador de la cuenta puede crear propiedades." };
     const ip    = getClientIpFromHeaders(await headers());
 
     const propiedad = await withTenant(actor.tenantId, async (tx) => {
@@ -393,6 +398,9 @@ export async function actualizarPropiedad(
         throw new DomainError(
           "La propiedad no es editable (está reservada o arrendada), no existe, o no pertenece a este corredor.",
         );
+      // ADR-0013 (Fase D) — un Colaborador solo edita lo que tiene asignado.
+      if (actor.rol !== "manager" && prop.asignadoAId !== actor.usuarioId)
+        throw new DomainError("No tienes acceso a esta propiedad.");
 
       // ADR-0013 (Fase C) — resuelve y valida el cambio de asignación antes
       // de tocar la fila; lanza DomainError si un no-Manager intenta cambiarla.
@@ -474,20 +482,23 @@ export async function desactivarPropiedad(propiedadId: string): Promise<Resultad
   if (!propiedadId)
     return { ok: false, error: "ID de propiedad requerido." };
   try {
-    const tenant = await getTenant();
-    await withTenant(tenant.id, async (tx) => {
+    const actor = await getActor();
+    await withTenant(actor.tenantId, async (tx) => {
       const prop = await tx.propiedad.findFirst({
-        where: { id: propiedadId, tenantId: tenant.id, estado: "disponible" },
+        where: { id: propiedadId, tenantId: actor.tenantId, estado: "disponible" },
       });
       if (!prop)
         throw new DomainError("La propiedad no existe, no pertenece a este corredor, o no está disponible.");
+      // ADR-0013 (Fase D) — un Colaborador solo actúa sobre lo que tiene asignado.
+      if (actor.rol !== "manager" && prop.asignadoAId !== actor.usuarioId)
+        throw new DomainError("No tienes acceso a esta propiedad.");
       await tx.propiedad.update({
-        where: { id: propiedadId, tenantId: tenant.id },
+        where: { id: propiedadId, tenantId: actor.tenantId },
         data:  { estado: "borrador" },
       });
       // Bajar del marketplace si había publicación activa
       await tx.publicacion.updateMany({
-        where: { propiedadId, tenantId: tenant.id, estado: "publicada" },
+        where: { propiedadId, tenantId: actor.tenantId, estado: "publicada" },
         data:  { estado: "bajada" },
       });
     });
@@ -510,20 +521,23 @@ export async function activarPropiedad(propiedadId: string): Promise<ResultadoOk
   if (!propiedadId)
     return { ok: false, error: "ID de propiedad requerido." };
   try {
-    const tenant = await getTenant();
-    await withTenant(tenant.id, async (tx) => {
+    const actor = await getActor();
+    await withTenant(actor.tenantId, async (tx) => {
       const prop = await tx.propiedad.findFirst({
-        where: { id: propiedadId, tenantId: tenant.id, estado: "borrador" },
+        where: { id: propiedadId, tenantId: actor.tenantId, estado: "borrador" },
       });
       if (!prop)
         throw new DomainError("La propiedad no existe, no pertenece a este corredor, o ya está activa.");
+      // ADR-0013 (Fase D) — un Colaborador solo actúa sobre lo que tiene asignado.
+      if (actor.rol !== "manager" && prop.asignadoAId !== actor.usuarioId)
+        throw new DomainError("No tienes acceso a esta propiedad.");
       await tx.propiedad.update({
-        where: { id: propiedadId, tenantId: tenant.id },
+        where: { id: propiedadId, tenantId: actor.tenantId },
         data:  { estado: "disponible" },
       });
       // Publicar en marketplace: reactiva si ya existe, crea si no
       const pubExistente = await tx.publicacion.findFirst({
-        where: { propiedadId, tenantId: tenant.id },
+        where: { propiedadId, tenantId: actor.tenantId },
       });
       if (pubExistente) {
         await tx.publicacion.update({
@@ -533,7 +547,7 @@ export async function activarPropiedad(propiedadId: string): Promise<ResultadoOk
       } else {
         await tx.publicacion.create({
           data: {
-            tenantId:    tenant.id,
+            tenantId:    actor.tenantId,
             propiedadId,
             titulo:      prop.direccion,
             estado:      "publicada",

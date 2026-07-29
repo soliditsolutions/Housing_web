@@ -109,6 +109,13 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL("/panel", request.url));
     }
 
+    // ADR-0013 (Fase D) — Estadísticas es business intelligence de cartera
+    // completa (turnover, retención, comparables de mercado); no se recorta
+    // por propiedad asignada, así que es exclusiva del Manager, igual que Equipo.
+    if (pathname.startsWith("/panel/estadisticas") && session.rol !== "manager") {
+      return NextResponse.redirect(new URL("/panel", request.url));
+    }
+
     const deviceCookie = request.cookies.get(DEVICE_COOKIE_NAME)?.value;
     const jwtDevice    = session.deviceToken;
 

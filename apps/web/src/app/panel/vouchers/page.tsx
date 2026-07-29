@@ -1,4 +1,4 @@
-import { getTenant, getVouchers, getContratosSelect } from "@/lib/queries";
+import { getActor, getVouchers, getContratosSelect, propiedadIdsVisibles } from "@/lib/queries";
 import { clp, fecha } from "@/lib/format";
 import { PageTitle } from "@/components/panel/ui";
 import { FiltrosClient } from "./filtros-client";
@@ -16,19 +16,20 @@ export default async function VouchersPage({
 }: {
   searchParams: Promise<{ tipo?: string; desde?: string; hasta?: string; contratoId?: string }>;
 }) {
-  const tenant  = await getTenant();
+  const actor   = await getActor();
   const params  = await searchParams;
+  const propiedadIds = await propiedadIdsVisibles(actor);
 
   const tipo = (params.tipo === "pago" || params.tipo === "liquidacion") ? params.tipo : undefined;
 
   const [vouchers, contratos] = await Promise.all([
-    getVouchers(tenant.id, {
+    getVouchers(actor.tenantId, {
       tipo,
       desde:      params.desde,
       hasta:      params.hasta,
       contratoId: params.contratoId,
-    }),
-    getContratosSelect(tenant.id),
+    }, propiedadIds),
+    getContratosSelect(actor.tenantId, propiedadIds),
   ]);
 
   return (
