@@ -47,10 +47,14 @@ type Propiedad = {
   latitud: number | null;
   longitud: number | null;
   mostrarUbicacionExacta: boolean;
+  asignadoAId: string | null;
+  asignadoA: { id: string; nombre: string } | null;
   propietario: { nombre: string };
   imagenes: Imagen[];
   _count: { contratos: number; publicaciones: number };
 };
+
+type Colaborador = { id: string; nombre: string };
 
 const TIPO_LABEL: Record<string, string> = {
   casa: "Casa", departamento: "Departamento", cabana: "Cabaña",
@@ -114,6 +118,8 @@ type FormProp = {
   otrasDescripciones: string;
   mostrarUbicacionExacta: boolean;
   imagenes: string[];
+  /** "" = sin asignar. Solo se envía al servidor cuando esManager. */
+  asignadoAId: string;
 };
 
 type FormCrear = FormProp & {
@@ -134,6 +140,7 @@ const FORM_CREAR_INICIAL: FormCrear = {
   mostrarUbicacionExacta: false,
   propietarioNombre: "", propietarioRut: "", propietarioEmail: "",
   imagenes: [""],
+  asignadoAId: "",
 };
 
 function formDesdePropiedad(p: Propiedad): FormProp {
@@ -157,6 +164,7 @@ function formDesdePropiedad(p: Propiedad): FormProp {
     otrasDescripciones: p.otrasDescripciones ?? "",
     mostrarUbicacionExacta: p.mostrarUbicacionExacta,
     imagenes:           p.imagenes.map((i) => i.url).concat(p.imagenes.length === 0 ? [""] : []),
+    asignadoAId:        p.asignadoAId ?? "",
   };
 }
 
@@ -336,6 +344,8 @@ function CamposProp({
   form,
   rutError,
   showPropietario,
+  esManager,
+  colaboradores,
   onChangeField,
   onChangeImagenes,
   onRutBlur,
@@ -343,6 +353,9 @@ function CamposProp({
   form: FormCrear;
   rutError: string;
   showPropietario: boolean;
+  /** ADR-0013 (Fase C) — el selector de colaborador es exclusivo del Manager. */
+  esManager: boolean;
+  colaboradores: Colaborador[];
   onChangeField: <K extends keyof FormCrear>(k: K, v: FormCrear[K]) => void;
   onChangeImagenes: (imgs: string[]) => void;
   onRutBlur: () => void;
@@ -657,6 +670,25 @@ function CamposProp({
         />
       </div>
 
+      {/* Colaborador asignado — ADR-0013 (Fase C). Exclusivo del Manager:
+          invisible para un Colaborador, no solo deshabilitado (ROL-UI-5). */}
+      {esManager && (
+        <div>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--hw-text-4)" }}>Colaborador asignado</p>
+          <select
+            value={form.asignadoAId}
+            onChange={(e) => onChangeField("asignadoAId", e.target.value)}
+            className="w-full rounded-xl border bg-[var(--hw-surface)] text-[var(--hw-text-1)] py-2 px-3 text-sm outline-none focus:border-[var(--hw-primary)] focus:ring-2 focus:ring-[var(--hw-primary-bd)]"
+            style={{ borderColor: "var(--hw-border)", background: "var(--hw-surface)" }}
+          >
+            <option value="">Sin asignar</option>
+            {colaboradores.map((c) => (
+              <option key={c.id} value={c.id}>{c.nombre}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* Propietario (solo en modo crear) */}
       {showPropietario && (
         <div className="border-t pt-4" style={{ borderColor: "var(--hw-border)" }}>
@@ -844,7 +876,15 @@ function DiagramaEstado({
 
 /* ═══════════════════════════════════════════════════════════════════ */
 
-export function PropiedadesClient({ propiedades }: { propiedades: Propiedad[] }) {
+export function PropiedadesClient({
+  propiedades,
+  esManager,
+  colaboradores,
+}: {
+  propiedades: Propiedad[];
+  esManager: boolean;
+  colaboradores: Colaborador[];
+}) {
   const router = useRouter();
   const [busqueda, setBusqueda]         = useState("");
   const [filtro, setFiltro]             = useState<FiltroEstado>("todas");
@@ -873,6 +913,7 @@ export function PropiedadesClient({ propiedades }: { propiedades: Propiedad[] })
     pagaGastosComunes: false, valorGastosComunes: "",
     aceptaMascotas: false,
     otrasDescripciones: "", mostrarUbicacionExacta: false, imagenes: [""],
+    asignadoAId: "",
   });
   const [errorEditar, setErrorEditar] = useState("");
   const [isPendingEditar, startEditar] = useTransition();
@@ -928,6 +969,9 @@ export function PropiedadesClient({ propiedades }: { propiedades: Propiedad[] })
         propietarioRut:    formCrear.propietarioRut.trim(),
         propietarioEmail:  formCrear.propietarioEmail.trim() || undefined,
         imagenes:          formCrear.imagenes.map((u) => u.trim()).filter(Boolean),
+        // Solo el Manager envía este campo — para un Colaborador queda
+        // undefined y el servidor lo trata como "no tocar" (defensa en profundidad).
+        ...(esManager ? { asignadoAId: formCrear.asignadoAId } : {}),
       });
       if (!res.ok) { setErrorCrear(res.error); return; }
       setOpenCrear(false);
@@ -979,6 +1023,7 @@ export function PropiedadesClient({ propiedades }: { propiedades: Propiedad[] })
         otrasDescripciones: formEditar.otrasDescripciones.trim() || undefined,
         mostrarUbicacionExacta: formEditar.mostrarUbicacionExacta,
         imagenes:          formEditar.imagenes.map((u) => u.trim()).filter(Boolean),
+        ...(esManager ? { asignadoAId: formEditar.asignadoAId } : {}),
       });
       if (!res.ok) { setErrorEditar(res.error); return; }
       setOpenEditar(false);
@@ -1229,6 +1274,7 @@ export function PropiedadesClient({ propiedades }: { propiedades: Propiedad[] })
                     { label: "Plantas",        value: seleccionada.plantas != null ? String(seleccionada.plantas) : "—" },
                     { label: "¿Condominio?",   value: seleccionada.esCondominio ? "Sí" : "No" },
                     { label: "Contratos",      value: String(seleccionada._count.contratos) },
+                    { label: "Colaborador asignado", value: seleccionada.asignadoA?.nombre ?? "Sin asignar" },
                   ].map(({ label, value }) => (
                     <div key={label} className="rounded-xl p-3" style={{ background: "var(--hw-surface-2)" }}>
                       <dt className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "var(--hw-text-4)" }}>{label}</dt>
@@ -1372,6 +1418,8 @@ export function PropiedadesClient({ propiedades }: { propiedades: Propiedad[] })
               form={formEditar as FormCrear}
               rutError=""
               showPropietario={false}
+              esManager={esManager}
+              colaboradores={colaboradores}
               onChangeField={(k, v) => setFieldEditar(k as keyof FormProp, v as never)}
               onChangeImagenes={(imgs) => setFieldEditar("imagenes", imgs)}
               onRutBlur={() => {}}
@@ -1450,6 +1498,8 @@ export function PropiedadesClient({ propiedades }: { propiedades: Propiedad[] })
               form={formCrear}
               rutError={rutErrorCrear}
               showPropietario={true}
+              esManager={esManager}
+              colaboradores={colaboradores}
               onChangeField={(k, v) => { setFieldCrear(k as keyof FormCrear, v as never); if (k === "propietarioRut" && rutErrorCrear) setRutErrorCrear(""); }}
               onChangeImagenes={(imgs) => setFieldCrear("imagenes", imgs)}
               onRutBlur={handleRutBlurCrear}

@@ -1,13 +1,15 @@
 "use server";
 
+import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
-import { getTenant } from "@/lib/queries";
-import { withTenant } from "@/lib/tenant-db";
+import { getTenant, getActor } from "@/lib/queries";
+import { withTenant, type TenantClient } from "@/lib/tenant-db";
 import { validarRut, esRegionValida, esComunaValidaEnRegion, esOrientacionValida } from "@housing/core";
 import { canonicalRut } from "@/lib/rut";
 import { logError } from "@/lib/logger";
 import { geocodificarDireccion } from "@/lib/geocoding";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getClientIpFromHeaders } from "@/lib/ip";
 
 export type ResultadoCrear =
   | { ok: true; id: string }
@@ -33,6 +35,40 @@ function filtrarImagenesValidas(imagenes: string[] | undefined): string[] {
     .map((u) => u.trim())
     .filter((u) => IMAGEN_URL_RE.test(u))
     .slice(0, 5); // máximo 5 imágenes
+}
+
+/**
+ * Resuelve el nuevo `asignadoAId` de una propiedad (ADR-0013, Fase C).
+ *
+ * `solicitado` es `undefined` cuando el campo ni siquiera viaja (Colaborador
+ * — la UI no renderiza el selector) y debe dejar la asignación intacta. Un
+ * Manager siempre envía el valor real del selector, incluida la cadena
+ * vacía ("Sin asignar") para desasignar explícitamente.
+ *
+ * Defensa en profundidad: aunque el selector esté oculto para un
+ * Colaborador, un request manual que intente cambiar el valor se rechaza
+ * aquí (mismo patrón que ROL-SEC-3) — no alcanza con ocultarlo en la UI.
+ */
+async function resolverAsignacion(
+  tx: TenantClient,
+  tenantId: string,
+  actorRol: "manager" | "colaborador",
+  solicitado: string | undefined,
+  actual: string | null,
+): Promise<string | null> {
+  if (solicitado === undefined) return actual;
+  const nuevo = solicitado || null;
+  if (nuevo === actual) return actual;
+  if (actorRol !== "manager")
+    throw new DomainError("Solo el administrador de la cuenta puede asignar o reasignar una propiedad.");
+  if (nuevo) {
+    const colaborador = await tx.usuario.findFirst({
+      where:  { id: nuevo, tenantId, rol: "colaborador", desactivadoEn: null },
+      select: { id: true },
+    });
+    if (!colaborador) throw new DomainError("El colaborador seleccionado no es válido.");
+  }
+  return nuevo;
 }
 
 /**
@@ -109,6 +145,8 @@ export async function crearPropiedad(data: {
   propietarioEmail?: string;
   /** URLs de imágenes (hasta 5). */
   imagenes?: string[];
+  /** Colaborador a cargo (ADR-0013). "" = sin asignar. Ignorado si no viene (Colaborador). */
+  asignadoAId?: string;
 }): Promise<ResultadoCrear> {
   if (!["casa", "departamento", "cabana"].includes(data.tipo))
     return { ok: false, error: "Tipo de propiedad inválido." };
@@ -169,17 +207,18 @@ export async function crearPropiedad(data: {
   );
 
   try {
-    const tenant = await getTenant();
+    const actor = await getActor();
+    const ip    = getClientIpFromHeaders(await headers());
 
-    const propiedad = await withTenant(tenant.id, async (tx) => {
+    const propiedad = await withTenant(actor.tenantId, async (tx) => {
       // Buscar o crear propietario por RUT (dentro del tenant)
       let propietario = await tx.persona.findFirst({
-        where: { tenantId: tenant.id, rut: propietarioRutCanon },
+        where: { tenantId: actor.tenantId, rut: propietarioRutCanon },
       });
       if (!propietario) {
         propietario = await tx.persona.create({
           data: {
-            tenantId: tenant.id,
+            tenantId: actor.tenantId,
             nombre: data.propietarioNombre.trim(),
             rut:    propietarioRutCanon,
             email:  data.propietarioEmail?.trim() || null,
@@ -187,9 +226,13 @@ export async function crearPropiedad(data: {
         });
       }
 
+      // ADR-0013 (Fase C) — una propiedad nueva siempre parte sin asignar;
+      // resolverAsignacion valida rol + colaborador si el Manager ya la asigna.
+      const asignadoAId = await resolverAsignacion(tx, actor.tenantId, actor.rol, data.asignadoAId, null);
+
       const p = await tx.propiedad.create({
         data: {
-          tenantId:    tenant.id,
+          tenantId:    actor.tenantId,
           propietarioId: propietario.id,
           tipo:        data.tipo as "casa" | "departamento" | "cabana",
           estado:      "borrador",          // ← siempre borrador al crear
@@ -215,6 +258,7 @@ export async function crearPropiedad(data: {
           mostrarUbicacionExacta: data.mostrarUbicacionExacta,
           latitud:  coords?.latitud  ?? null,
           longitud: coords?.longitud ?? null,
+          asignadoAId,
         },
       });
 
@@ -222,11 +266,20 @@ export async function crearPropiedad(data: {
       if (imagenesValidas.length > 0) {
         await tx.imagenPropiedad.createMany({
           data: imagenesValidas.map((url, idx) => ({
-            tenantId:    tenant.id,
+            tenantId:    actor.tenantId,
             propiedadId: p.id,
             url,
             orden:       idx,
           })),
+        });
+      }
+
+      if (asignadoAId) {
+        await tx.auditoriaEquipo.create({
+          data: {
+            tenantId: actor.tenantId, actorId: actor.usuarioId,
+            accion: "asignar_propiedad", objetivoId: asignadoAId, propiedadId: p.id, ip,
+          },
         });
       }
 
@@ -238,6 +291,7 @@ export async function crearPropiedad(data: {
     return { ok: true, id: propiedad.id };
   } catch (e) {
     logError("crearPropiedad", e);
+    if (e instanceof DomainError) return { ok: false, error: e.message };
     return { ok: false, error: "Error al crear la propiedad. Por favor intenta nuevamente." };
   }
 }
@@ -269,6 +323,8 @@ export async function actualizarPropiedad(
     otrasDescripciones?: string;
     mostrarUbicacionExacta: boolean;
     imagenes?: string[];
+    /** Colaborador a cargo (ADR-0013). "" = desasignar explícito. Ausente = no tocar (Colaborador). */
+    asignadoAId?: string;
   },
 ): Promise<ResultadoOk> {
   if (!propiedadId)
@@ -321,14 +377,15 @@ export async function actualizarPropiedad(
   );
 
   try {
-    const tenant = await getTenant();
+    const actor = await getActor();
+    const ip    = getClientIpFromHeaders(await headers());
 
-    await withTenant(tenant.id, async (tx) => {
+    await withTenant(actor.tenantId, async (tx) => {
       /* Verificar que existe, pertenece al tenant y es editable */
       const prop = await tx.propiedad.findFirst({
         where: {
           id: propiedadId,
-          tenantId: tenant.id,
+          tenantId: actor.tenantId,
           estado: { in: ["borrador", "disponible"] },
         },
       });
@@ -337,9 +394,13 @@ export async function actualizarPropiedad(
           "La propiedad no es editable (está reservada o arrendada), no existe, o no pertenece a este corredor.",
         );
 
+      // ADR-0013 (Fase C) — resuelve y valida el cambio de asignación antes
+      // de tocar la fila; lanza DomainError si un no-Manager intenta cambiarla.
+      const asignadoAId = await resolverAsignacion(tx, actor.tenantId, actor.rol, data.asignadoAId, prop.asignadoAId);
+
       /* Actualizar campos */
       await tx.propiedad.update({
-        where: { id: propiedadId, tenantId: tenant.id },
+        where: { id: propiedadId, tenantId: actor.tenantId },
         data: {
           tipo:        data.tipo as "casa" | "departamento" | "cabana",
           direccion:   data.direccion.trim(),
@@ -363,21 +424,34 @@ export async function actualizarPropiedad(
           otrasDescripciones: data.otrasDescripciones?.trim() || null,
           mostrarUbicacionExacta: data.mostrarUbicacionExacta,
           ...(coords ? { latitud: coords.latitud, longitud: coords.longitud } : {}),
+          asignadoAId,
         },
       });
 
       /* Reemplazar imágenes (delete-all + insert-new) */
       await tx.imagenPropiedad.deleteMany({
-        where: { propiedadId, tenantId: tenant.id },
+        where: { propiedadId, tenantId: actor.tenantId },
       });
       if (imagenesValidas.length > 0) {
         await tx.imagenPropiedad.createMany({
           data: imagenesValidas.map((url, idx) => ({
-            tenantId:    tenant.id,
+            tenantId:    actor.tenantId,
             propiedadId,
             url,
             orden:       idx,
           })),
+        });
+      }
+
+      // Auditoría solo si la asignación realmente cambió — objetivo es el
+      // colaborador afectado (el nuevo si se asignó, el anterior si se quitó).
+      if (asignadoAId !== prop.asignadoAId) {
+        await tx.auditoriaEquipo.create({
+          data: {
+            tenantId: actor.tenantId, actorId: actor.usuarioId,
+            accion: asignadoAId ? "asignar_propiedad" : "desasignar_propiedad",
+            objetivoId: asignadoAId ?? prop.asignadoAId, propiedadId, ip,
+          },
         });
       }
     });

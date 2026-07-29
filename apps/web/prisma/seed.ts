@@ -91,7 +91,7 @@ async function main() {
 
   const casaCLP = await mkProp({
     propietarioId: prop1.id, tipo: "casa", estado: "arrendada",
-    direccion: "Los Aromos 1234", comuna: "Ñuñoa", region: "Metropolitana",
+    direccion: "Los Aromos 1234", comuna: "Ñuñoa", region: "Región Metropolitana de Santiago",
     orientacion: "NP", antiguedadAnios: 12, m2Construidos: 120, m2Totales: 200,
     esCondominio: false, plantas: 2, piezas: 4, banos: 2, estacionamientos: 1,
     pagaGastosComunes: false,
@@ -99,14 +99,14 @@ async function main() {
   const deptoUF = await mkProp({
     propietarioId: prop2.id, tipo: "departamento", estado: "arrendada",
     direccion: "Av. Providencia 2020, depto 805", comuna: "Providencia",
-    region: "Metropolitana", orientacion: "SP", antiguedadAnios: 5,
+    region: "Región Metropolitana de Santiago", orientacion: "SP", antiguedadAnios: 5,
     m2Construidos: 65, m2Totales: 72, esCondominio: true, plantas: 1,
     piezas: 2, banos: 2, estacionamientos: 1,
     pagaGastosComunes: true, valorGastosComunes: 85000,
   });
   const cabanaDisp = await mkProp({
     propietarioId: prop1.id, tipo: "cabana", estado: "disponible",
-    direccion: "Camino al Lago km 4", comuna: "Pucón", region: "La Araucanía",
+    direccion: "Camino al Lago km 4", comuna: "Pucón", region: "Región de la Araucanía",
     orientacion: "P", antiguedadAnios: 8, m2Construidos: 90, m2Totales: 5000,
     esCondominio: false, plantas: 1, piezas: 3, banos: 2, estacionamientos: 2,
     pagaGastosComunes: false,
@@ -114,7 +114,7 @@ async function main() {
   const deptoReservado = await mkProp({
     propietarioId: prop2.id, tipo: "departamento", estado: "reservada",
     direccion: "Av. Apoquindo 5500, depto 1502", comuna: "Las Condes",
-    region: "Metropolitana", orientacion: "N", antiguedadAnios: 3,
+    region: "Región Metropolitana de Santiago", orientacion: "N", antiguedadAnios: 3,
     m2Construidos: 80, m2Totales: 90, esCondominio: true, plantas: 1,
     piezas: 3, banos: 2, estacionamientos: 2,
     pagaGastosComunes: true, valorGastosComunes: 120000,

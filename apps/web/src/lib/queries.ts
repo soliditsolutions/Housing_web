@@ -518,6 +518,7 @@ export async function getPropiedades(tenantId: string) {
     include: {
       propietario: { select: { nombre: true, email: true, rut: true } },
       imagenes: { orderBy: { orden: "asc" } },
+      asignadoA: { select: { id: true, nombre: true } },
       _count: { select: { contratos: true, publicaciones: true } },
     },
   }));
@@ -544,9 +545,25 @@ export async function getPropiedades(tenantId: string) {
     latitud: p.latitud ? Number(p.latitud) : null,
     longitud: p.longitud ? Number(p.longitud) : null,
     mostrarUbicacionExacta: p.mostrarUbicacionExacta,
+    asignadoAId: p.asignadoAId,
+    asignadoA: p.asignadoA,
     propietario: p.propietario,
     imagenes: p.imagenes,
     _count: p._count,
+  }));
+}
+
+/**
+ * Colaboradores activos del tenant, para poblar el selector "Colaborador
+ * asignado" del editor de propiedad (ADR-0013, Fase C). Sin gate de rol —
+ * el llamador (Server Component) decide si renderiza el selector según
+ * `actor.rol`; esta función solo trae datos ya acotados al tenant.
+ */
+export async function getColaboradoresActivos(tenantId: string) {
+  return withTenant(tenantId, (tx) => tx.usuario.findMany({
+    where:   { tenantId, rol: "colaborador", desactivadoEn: null },
+    select:  { id: true, nombre: true },
+    orderBy: { nombre: "asc" },
   }));
 }
 
