@@ -29,7 +29,7 @@ async function main() {
     return tx.usuario.create({
       data: {
         tenantId:       tenant.id,
-        rol:            "admin",
+        rol:            "manager",
         nombre:         "Carlos Corredor",
         rut:            "11111111-1",
         email:          "corredor.e2e@test.cl",

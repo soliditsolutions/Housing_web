@@ -1,18 +1,20 @@
 "use client";
 
-import { useActionState, useState, useMemo, useEffect, useRef } from "react";
+import { useActionState, useState, useMemo, useEffect, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import {
-  User, Phone, CalendarDays, MapPin, Lock, Shield,
-  Eye, EyeOff, CheckCircle2, Loader2, Camera,
+  User, Phone, CalendarDays, MapPin, Lock, Shield, Fingerprint,
+  Eye, EyeOff, CheckCircle2, Loader2, Camera, Send, RotateCw, X, Mail,
 } from "lucide-react";
-import { guardarPerfilAction, cambiarPasswordAction } from "./actions";
+import {
+  guardarPerfilAction, cambiarPasswordAction,
+  solicitarCambioContactoAction, confirmarCambioContactoAction,
+} from "./actions";
 import { REGIONES_CHILE, getComunasDeRegion } from "@housing/core";
-import type { PerfilState, PasswordState } from "./actions";
+import type { PerfilState, PasswordState, CampoContacto } from "./actions";
 import { evaluatePassword }        from "@/lib/password-strength";
 import { useToast }                from "@/components/ui/toast";
-import { validateRut, formatRut }  from "@/lib/rut";
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -276,6 +278,205 @@ function CambiarPasswordSection() {
   );
 }
 
+// ── Campo con cambio protegido por código (teléfono / correo) ────────────────
+// El valor actual solo cambia tras confirmar un código de 6 dígitos enviado
+// al correo YA verificado de la sesión — nunca al valor nuevo. Reemplaza el
+// input libremente editable que tenía antes el teléfono, y le da al correo
+// (antes 100% bloqueado) una forma de cambiarlo con la misma fricción que
+// verificar un dispositivo nuevo.
+
+function CambiarContactoField({
+  campo,
+  label,
+  icon,
+  valorActual,
+  inputType,
+  placeholder,
+}: {
+  campo: CampoContacto;
+  label: string;
+  icon: React.ReactNode;
+  valorActual: string;
+  inputType: "tel" | "email";
+  placeholder: string;
+}) {
+  const router = useRouter();
+  const { show: toast } = useToast();
+  const [isPending, startTransition] = useTransition();
+  const [paso, setPaso]           = useState<"idle" | "nuevo" | "codigo">("idle");
+  const [nuevoValor, setNuevoValor] = useState("");
+  const [codigo, setCodigo]         = useState("");
+  const [error, setError]           = useState("");
+  const [valorMostrado, setValorMostrado] = useState(valorActual);
+  const [cooldown, setCooldown]     = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
+  function cancelar() {
+    setPaso("idle");
+    setNuevoValor("");
+    setCodigo("");
+    setError("");
+  }
+
+  function handleEnviarCodigo() {
+    setError("");
+    startTransition(async () => {
+      const res = await solicitarCambioContactoAction(campo, nuevoValor);
+      if (!res.ok) { setError(res.error); return; }
+      setPaso("codigo");
+      setCooldown(60);
+      toast("Código enviado a tu correo actual.", "success");
+    });
+  }
+
+  function handleConfirmar() {
+    setError("");
+    startTransition(async () => {
+      const res = await confirmarCambioContactoAction(campo, codigo);
+      if (!res.ok) { setError(res.error); return; }
+      setValorMostrado(res.valorNuevo);
+      cancelar();
+      toast(`${label} actualizado correctamente.`, "success");
+      router.refresh();
+    });
+  }
+
+  const fieldStyle: React.CSSProperties = {
+    height: "44px", width: "100%", borderRadius: "12px",
+    border: "1px solid var(--hw-border-2)", background: "var(--hw-surface)",
+    color: "var(--hw-text-1)", fontSize: "14px", padding: "0 14px",
+    outline: "none", boxShadow: "var(--hw-input-shadow)",
+    opacity: isPending ? 0.6 : 1,
+    transition: "border-color 150ms ease, box-shadow 150ms ease",
+  };
+  const btnPrimaryStyle: React.CSSProperties = {
+    height: "40px", fontSize: "13px", borderRadius: "10px", flexShrink: 0,
+  };
+  const btnGhostStyle: React.CSSProperties = {
+    height: "40px", borderRadius: "10px", padding: "0 14px", fontSize: "13px", fontWeight: 600,
+    background: "var(--hw-surface-2)", color: "var(--hw-text-3)", border: "1px solid var(--hw-border)",
+    display: "inline-flex", alignItems: "center", gap: "6px", flexShrink: 0,
+    transition: "background 150ms ease, border-color 150ms ease, color 150ms ease",
+  };
+  const ghostHover = {
+    onMouseEnter: (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.currentTarget.style.background   = "var(--hw-surface-3, var(--hw-border))";
+      e.currentTarget.style.borderColor  = "var(--hw-border-2)";
+      e.currentTarget.style.color        = "var(--hw-text-1)";
+    },
+    onMouseLeave: (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.currentTarget.style.background   = "var(--hw-surface-2)";
+      e.currentTarget.style.borderColor  = "var(--hw-border)";
+      e.currentTarget.style.color        = "var(--hw-text-3)";
+    },
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <label className="flex items-center gap-1.5 text-sm font-semibold" style={{ color: "var(--hw-text-2)" }}>
+        {icon}
+        {label}
+      </label>
+
+      {paso === "idle" && (
+        <div className="flex items-center gap-2">
+          <input
+            type={inputType} value={valorMostrado} disabled readOnly
+            title={valorMostrado}
+            style={{ ...fieldStyle, opacity: 0.55, cursor: "not-allowed", minWidth: 0, textOverflow: "ellipsis" }}
+          />
+          <button
+            type="button" onClick={() => setPaso("nuevo")}
+            className="hw-btn" style={btnGhostStyle} {...ghostHover}
+          >
+            Cambiar
+          </button>
+        </div>
+      )}
+
+      {paso === "nuevo" && (
+        <div className="space-y-2">
+          <input
+            type={inputType} value={nuevoValor}
+            onChange={(e) => setNuevoValor(e.target.value)}
+            placeholder={placeholder} disabled={isPending}
+            style={fieldStyle} autoFocus
+            onFocus={(e) => { e.currentTarget.style.borderColor = "var(--hw-primary)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow-focus)"; }}
+            onBlur={(e)  => { e.currentTarget.style.borderColor = "var(--hw-border-2)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow)"; }}
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button" onClick={handleEnviarCodigo} disabled={isPending || !nuevoValor.trim()}
+              className="hw-btn-primary" style={{ ...btnPrimaryStyle, opacity: !nuevoValor.trim() ? 0.5 : 1 }}
+            >
+              {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Send className="h-3.5 w-3.5" aria-hidden="true" />}
+              {isPending ? "Enviando…" : "Enviar código"}
+            </button>
+            <button type="button" onClick={cancelar} disabled={isPending} className="hw-btn" style={btnGhostStyle} {...ghostHover}>
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {paso === "codigo" && (
+        <div className="space-y-2">
+          <p className="text-xs" style={{ color: "var(--hw-text-3)" }}>
+            Enviamos un código de 6 dígitos a tu correo actual para confirmar el cambio a{" "}
+            <strong style={{ color: "var(--hw-text-2)" }}>{nuevoValor}</strong>.
+          </p>
+          <input
+            type="text" inputMode="numeric" maxLength={6}
+            value={codigo}
+            onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ""))}
+            placeholder="000000" disabled={isPending}
+            style={{ ...fieldStyle, letterSpacing: "0.3em", textAlign: "center" }}
+            autoFocus
+            onFocus={(e) => { e.currentTarget.style.borderColor = "var(--hw-primary)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow-focus)"; }}
+            onBlur={(e)  => { e.currentTarget.style.borderColor = "var(--hw-border-2)"; e.currentTarget.style.boxShadow = "var(--hw-input-shadow)"; }}
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button" onClick={handleConfirmar} disabled={isPending || codigo.length !== 6}
+              className="hw-btn-primary" style={{ ...btnPrimaryStyle, opacity: codigo.length !== 6 ? 0.5 : 1 }}
+            >
+              {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />}
+              {isPending ? "Confirmando…" : "Confirmar"}
+            </button>
+            <button
+              type="button" onClick={handleEnviarCodigo} disabled={isPending || cooldown > 0}
+              className="hw-btn" style={{ ...btnGhostStyle, opacity: cooldown > 0 ? 0.6 : 1 }} {...ghostHover}
+            >
+              <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
+              {cooldown > 0 ? `Reenviar (${cooldown}s)` : "Reenviar código"}
+            </button>
+            <button type="button" onClick={cancelar} disabled={isPending} className="hw-btn" style={btnGhostStyle} {...ghostHover}>
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{error}</p>
+      )}
+
+      {paso !== "idle" && (
+        <p className="text-[11px]" style={{ color: "var(--hw-text-4)" }}>
+          ¿No tienes acceso a tu correo? Contacta a soporte.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── Sección: 2FA (coming soon) ────────────────────────────────────────────────
 
 function TwoFASection() {
@@ -346,16 +547,10 @@ export function PerfilForm({ perfil, section = "datos" }: { perfil: PerfilData; 
   );
 
   const [fotoPerfil, setFotoPerfil] = useState(perfil.fotoPerfil ?? "");
-  const [rut, setRut]               = useState(perfil.rut ?? "");
   const [region, setRegion]         = useState(perfil.region ?? "");
   const [ciudad, setCiudad]         = useState(perfil.ciudad ?? "");
   const comunasDisponibles          = useMemo(() => getComunasDeRegion(region), [region]);
-  const rutInlineError = rut.length > 3 && !validateRut(rut) ? "RUT inválido" : null;
-
-  function handleRutChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const raw = e.target.value.replace(/[^0-9kK]/g, "");
-    setRut(raw.length > 1 ? formatRut(raw) : raw);
-  }
+  const rut = perfil.rut ?? "";
 
   useEffect(() => {
     if (!state) return;
@@ -429,97 +624,111 @@ export function PerfilForm({ perfil, section = "datos" }: { perfil: PerfilData; 
             </h2>
           </div>
 
-          {/* Nombre (read-only) */}
+          {/* Nombre + RUT — identidad verificada contra la cédula en /registro,
+              inmutables de por vida (defensa en profundidad server-side en
+              guardarPerfilAction, esto es solo la capa visual). */}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold" style={labelStyle}>
+              <label className="flex items-center gap-1.5 text-sm font-semibold" style={labelStyle}>
+                <User className="h-3.5 w-3.5" aria-hidden="true" />
                 Nombre completo
               </label>
-              <input
-                type="text" value={perfil.nombre} disabled readOnly
-                style={{ ...inputBase, opacity: 0.5, cursor: "not-allowed" }}
-              />
+              <div className="relative">
+                <input
+                  type="text" value={perfil.nombre} disabled readOnly
+                  style={{ ...inputBase, opacity: 0.55, cursor: "not-allowed", paddingRight: "38px" }}
+                />
+                <Lock className="pointer-events-none absolute right-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" style={{ color: "var(--hw-text-4)" }} aria-hidden="true" />
+              </div>
             </div>
 
-            {/* Email (read-only) */}
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold" style={labelStyle}>
-                Correo electrónico
+              <label htmlFor="rut" className="flex items-center gap-1.5 text-sm font-semibold" style={labelStyle}>
+                <Fingerprint className="h-3.5 w-3.5" aria-hidden="true" />
+                RUT
               </label>
-              <input
-                type="email" value={perfil.email} disabled readOnly
-                style={{ ...inputBase, opacity: 0.5, cursor: "not-allowed" }}
-              />
-            </div>
-          </div>
-
-          {/* RUT */}
-          <div className="space-y-1.5">
-            <label htmlFor="rut" className="block text-sm font-semibold" style={labelStyle}>
-              RUT{" "}
-              <span style={{ color: "var(--hw-danger)" }}>*</span>
-            </label>
-            <input
-              id="rut" name="rut" type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={12}
-              value={rut}
-              onChange={handleRutChange}
-              placeholder="12.345.678-9"
-              required disabled={pending}
-              style={{
-                ...inputBase,
-                borderColor: (rutInlineError || fieldError("rut")) ? "var(--hw-danger)" : undefined,
-              }}
-              {...focusHandlers}
-            />
-            {(rutInlineError || fieldError("rut")) && (
-              <p className="text-xs" style={{ color: "var(--hw-danger)" }}>
-                {fieldError("rut") ?? rutInlineError}
-              </p>
-            )}
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            {/* Teléfono */}
-            <div className="space-y-1.5">
-              <label htmlFor="telefono" className="block text-sm font-semibold" style={labelStyle}>
-                <Phone className="inline h-3.5 w-3.5 mr-1 mb-0.5" aria-hidden="true" />
-                Teléfono{" "}
-                <span style={{ color: "var(--hw-danger)" }}>*</span>
-              </label>
-              <input
-                id="telefono" name="telefono" type="tel"
-                defaultValue={perfil.telefono ?? ""}
-                placeholder="+56 9 1234 5678"
-                required disabled={pending}
-                style={inputBase}
-                {...focusHandlers}
-              />
-              {fieldError("telefono") && (
-                <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("telefono")}</p>
+              <div className="relative">
+                <input
+                  id="rut" name="rut" type="text"
+                  value={rut} readOnly
+                  style={{ ...inputBase, opacity: 0.55, cursor: "not-allowed", paddingRight: "38px" }}
+                />
+                <Lock className="pointer-events-none absolute right-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" style={{ color: "var(--hw-text-4)" }} aria-hidden="true" />
+              </div>
+              {fieldError("rut") && (
+                <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("rut")}</p>
               )}
             </div>
+          </div>
+          <p className="-mt-2 flex items-center gap-1.5 text-[11px]" style={{ color: "var(--hw-text-4)" }}>
+            <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />
+            Verificados con tu cédula al crear la cuenta — no se pueden modificar.
+          </p>
 
-            {/* Fecha de nacimiento */}
-            <div className="space-y-1.5">
-              <label htmlFor="fechaNacimiento" className="block text-sm font-semibold" style={labelStyle}>
-                <CalendarDays className="inline h-3.5 w-3.5 mr-1 mb-0.5" aria-hidden="true" />
-                Fecha de nacimiento{" "}
-                <span style={{ color: "var(--hw-danger)" }}>*</span>
-              </label>
+          {/* Fecha de nacimiento — editable una sola vez, luego inmutable */}
+          <div className="space-y-1.5">
+            <label htmlFor="fechaNacimiento" className="flex items-center gap-1.5 text-sm font-semibold" style={labelStyle}>
+              <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+              Fecha de nacimiento{" "}
+              {!perfil.fechaNacimiento && <span style={{ color: "var(--hw-danger)" }}>*</span>}
+            </label>
+            <div className="relative sm:w-1/2 sm:pr-2">
               <input
                 id="fechaNacimiento" name="fechaNacimiento" type="date"
                 defaultValue={toDateInput(perfil.fechaNacimiento)}
                 required disabled={pending}
-                style={inputBase}
+                readOnly={!!perfil.fechaNacimiento}
+                style={{
+                  ...inputBase,
+                  ...(perfil.fechaNacimiento ? { opacity: 0.55, cursor: "not-allowed", paddingRight: "38px" } : {}),
+                }}
                 {...focusHandlers}
               />
-              {fieldError("fechaNacimiento") && (
-                <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("fechaNacimiento")}</p>
+              {perfil.fechaNacimiento && (
+                <Lock className="pointer-events-none absolute right-7 top-1/2 h-3.5 w-3.5 -translate-y-1/2 sm:right-3.5" style={{ color: "var(--hw-text-4)" }} aria-hidden="true" />
               )}
             </div>
+            {fieldError("fechaNacimiento") && (
+              <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("fechaNacimiento")}</p>
+            )}
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {/* Teléfono — editable libremente solo la primera vez (onboarding,
+                perfil.telefono === null); una vez fijado, solo cambia vía
+                CambiarContactoField (código al correo actual). */}
+            {perfil.telefono ? (
+              <CambiarContactoField
+                campo="telefono" label="Teléfono" inputType="tel"
+                icon={<Phone className="h-3.5 w-3.5" aria-hidden="true" />}
+                valorActual={perfil.telefono} placeholder="+56 9 1234 5678"
+              />
+            ) : (
+              <div className="space-y-1.5">
+                <label htmlFor="telefono" className="flex items-center gap-1.5 text-sm font-semibold" style={labelStyle}>
+                  <Phone className="h-3.5 w-3.5" aria-hidden="true" />
+                  Teléfono{" "}
+                  <span style={{ color: "var(--hw-danger)" }}>*</span>
+                </label>
+                <input
+                  id="telefono" name="telefono" type="tel"
+                  defaultValue="" placeholder="+56 9 1234 5678"
+                  required disabled={pending}
+                  style={inputBase}
+                  {...focusHandlers}
+                />
+                {fieldError("telefono") && (
+                  <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("telefono")}</p>
+                )}
+              </div>
+            )}
+
+            {/* Correo — siempre viene fijado desde /registro, cambia solo vía código */}
+            <CambiarContactoField
+              campo="email" label="Correo electrónico" inputType="email"
+              icon={<Mail className="h-3.5 w-3.5" aria-hidden="true" />}
+              valorActual={perfil.email} placeholder="nuevo@correo.cl"
+            />
           </div>
         </section>
 

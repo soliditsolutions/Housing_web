@@ -410,3 +410,52 @@ export async function sendDeviceCodeEmail(
     `,
   });
 }
+
+/** Envía el código de confirmación para cambiar teléfono o correo desde Mi perfil. */
+export async function sendCambioContactoCodeEmail(
+  email: string,
+  nombre: string,
+  codigo: string,
+  campo: "telefono" | "email",
+  valorNuevo: string,
+): Promise<void> {
+  const campoLabel = campo === "telefono" ? "teléfono" : "correo";
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log("\n──────────────────────────────────────────────────────");
+    console.log("🔐  EMAIL SIMULADO — Cambio de contacto");
+    console.log(`    Para        : ${email} (${nombre})`);
+    console.log(`    Código      : ${codigo}`);
+    console.log(`    Campo       : ${campoLabel}`);
+    console.log(`    Valor nuevo : ${valorNuevo}`);
+    console.log(`    Válido      : 10 minutos`);
+    console.log("──────────────────────────────────────────────────────\n");
+    return;
+  }
+
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) throw new Error("EMAIL_PROVIDER_NOT_CONFIGURED");
+
+  const { Resend } = await import("resend");
+  const resend = new Resend(apiKey);
+
+  await resend.emails.send({
+    from:    "Housing SOLIDIT <no-reply@solidit.cl>",
+    to:      email,
+    subject: `${codigo} — Confirma tu cambio de ${campoLabel}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="margin:0 0 8px">Hola, ${nombre}</h2>
+        <p style="color:#475569">Pediste cambiar tu ${campoLabel} a <strong>${valorNuevo}</strong>.</p>
+        <div style="background:#F1F5F9;border-radius:12px;padding:24px;text-align:center;margin:24px 0">
+          <p style="margin:0;font-size:13px;color:#64748B;text-transform:uppercase;letter-spacing:.05em">Tu código de confirmación</p>
+          <p style="font-size:40px;font-weight:700;letter-spacing:.15em;color:#0F172A;margin:8px 0">${codigo}</p>
+          <p style="margin:0;font-size:12px;color:#94A3B8">Válido por 10 minutos · Máximo 3 intentos</p>
+        </div>
+        <p style="font-size:12px;color:#94A3B8">
+          Si no fuiste tú, ignora este correo — tu ${campoLabel} no cambiará sin este código.
+        </p>
+      </div>
+    `,
+  });
+}

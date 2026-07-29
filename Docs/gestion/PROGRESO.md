@@ -2,7 +2,9 @@
 
 > Checklist que actualizamos en cada etapa. `[x]` hecho · `[~]` en curso · `[ ]` pendiente.
 
-_Última actualización: 2026-07-27 — Ítem 2 (garantía UF/CLP) e Ítem 10 (estadísticas por plan) completos; Aurora tema dual extendido al sidebar del panel (antes era navy fijo en ambos temas — ver Etapa 6); UI/UX Pro Max (5 partes) + auditoría de accesibilidad (etapas 1-4) completas. Detalle en Etapa 6 al final._
+_Última actualización: 2026-07-28 — Cuentas multi-usuario (Manager/Collaborator, ADR-0013) Fase A completa: rename de rol, `getActor()`, schema de invitación/auditoría/desactivación. Dos hallazgos de seguridad encontrados y corregidos en el mismo trabajo (RUT editable sin re-verificación en Mi perfil; crash en vez de expulsión limpia al desactivar un usuario con sesión activa). Detalle al final._
+
+_Actualización anterior: 2026-07-27 — Ítem 2 (garantía UF/CLP) e Ítem 10 (estadísticas por plan) completos; Aurora tema dual extendido al sidebar del panel (antes era navy fijo en ambos temas — ver Etapa 6); UI/UX Pro Max (5 partes) + auditoría de accesibilidad (etapas 1-4) completas. Detalle en Etapa 6 al final._
 
 _Actualización anterior: 2026-07-03 — Auditoría E2E adversarial con BD limpia (ver `Docs/gestion/auditoria-e2e-2026-07.md`). Se encontró y corrigió un **bug crítico (AUD-09)**: ningún código transicionaba un período de `pendiente` a `atrasado`, por lo que la conciliación era imposible para cualquier período real (el seed fabricaba ese estado a mano, ocultando el gap). Corregido con `marcarPeriodosAtrasados()` invocada en dashboard/cobros/detalle de contrato/portal/cron. Verificado E2E: ciclo completo crear contrato → conciliar con mora real → cerrar liquidación → voucher → portal. Además se corrigieron 8 hallazgos más (sesión de perfil expulsando a 2FA, rutas públicas sin rate-limit/try-catch, RUT canónico, etc.) — 236/236 tests + 47/47 core + `tsc` limpio._
 
@@ -256,6 +258,21 @@ El tema dual Aurora (glassmorphism + fondo animado) ya cubría sitio público, a
 - [x] **Diseño real para tema claro** (no solo "aclarar la paleta oscura"): tokens nuevos `--hw-panel-nav-*` (themeados, paralelos a `--hw-sidebar-*` que sigue intacto para login/registro) — en claro, vidrio blanco real (`--hw-surface`) + texto oscuro + acento índigo en el ítem activo, en vez de overlays blancos que sobre una base clara no se veían. Ver `BRAIN.md` §2 para la lección de arquitectura de tokens.
 - [x] Ajuste de contraste/intensidad de `.hw-beams-layer` en ambos temas (opacidad y saturación de color bajadas ~35-40%) tras verificación visual — la primera versión resultaba demasiado intensa, en particular en la esquina del header.
 - [x] Verificado en navegador: ambos temas, desktop + mobile (drawer), hover, estado colapsado, `tsc`/`eslint` limpios.
+
+### Cuentas multi-usuario (Manager/Collaborator) — Fase A completa (2026-07-28)
+Ver `Docs/decisiones/ADR-0013-cuentas-multiusuario.md` para el diseño completo y `Docs/gestion/plan-de-pruebas-roles-multiusuario.md` para la vara de aceptación. Fase A es la fundación invisible (sin cambio de comportamiento para el Manager único de hoy) — Fases B-E (invitación, asignación de propiedad, cascada de filtrado, cupos) quedan pendientes.
+
+- [x] Rename de enum `RolUsuario`: `admin`/`operador` → `manager`/`colaborador` (`ALTER TYPE ... RENAME VALUE`, sin backfill)
+- [x] Schema: `Propiedad.asignadoAId`, `Usuario.desactivadoEn`, modelos `InvitacionColaborador` y `AuditoriaEquipo` (este último agregado tras hallazgo `ROL-INFO-4` del plan de pruebas — auditoría de invitar/asignar/desasignar/desactivar/reactivar)
+- [x] `setup.sql`: `auth_lookup_usuario_by_email` devuelve `desactivado_en`; RLS de `auditoria_equipo`
+- [x] `getActor()` nuevo en `lib/queries.ts`; `getTenant()` pasa a ser wrapper delgado — los 17+ call sites existentes siguen funcionando igual
+- [x] `login/actions.ts` rechaza el login (mensaje genérico anti-enumeración) si el usuario está desactivado
+- [x] `tsc`/`eslint` limpios, 299/301 tests verdes (2 fallos pre-existentes sin relación — `nav.test.tsx` y `marcar-periodos-atrasados.test.ts`, no tocados esta sesión)
+
+**Dos hallazgos de seguridad encontrados y corregidos en el mismo trabajo** (no diferidos — ver memoria de sesión `feedback-security-in-implementation`):
+- **RUT editable sin re-verificación** en `/panel/perfil`: el RUT es la clave de la verificación de identidad contra la cédula (`/registro`), pero quedaba libremente editable después — cualquier corredor podía cambiarlo a otro RUT válido no reclamado. Corregido: RUT, nombre y fecha de nacimiento inmutables de por vida (chequeado server-side contra la fila real, no solo oculto en la UI); teléfono y correo ahora requieren un código de 6 dígitos enviado al correo **actual** antes de aceptar el cambio (`CodigoCambioContacto`, mismo patrón que `CodigoDispositivo` de la verificación de dispositivo nuevo).
+- **Crash en vez de expulsión limpia (ROL-SEC-9)**: al desactivar a un usuario con sesión activa, la siguiente request crasheaba con una pantalla de error de Next.js en vez de redirigir a `/login` — `clearSessionCookie()` no puede llamarse desde un Server Component en render, solo desde una Server Action o Route Handler. Corregido: el chequeo vive en `panel/layout.tsx` (choke point de todo `/panel/*`) y redirige a un nuevo handler `GET /api/auth/logout` que sí puede limpiar la cookie (evita además un loop de redirects con el proxy, que solo valida la firma del JWT).
+- Regression test agregado: `src/lib/__tests__/auth-jwt-tamper.test.ts` (ROL-SEC-5 — manipulación de JWT).
 
 ## Notas / decisiones pendientes
 - Proveedor de identidad para producción (sin definir).

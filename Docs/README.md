@@ -4,7 +4,7 @@ Fuente de verdad del proyecto. Todo lo que decidimos, por qué, qué hace el sis
 
 La documentación se organiza en **tres bloques** (Técnico, Funcional, Gestión), más un bloque de **decisiones** (ADRs) y el **contexto de desarrollo** (`BRAIN.md`, en la raíz del repo).
 
-> **Estado (2026-07-27):** MVP **~97 %** completo (núcleo + ampliación + pulido; resta el recorrido de demostración). Extras de Fase 2 ya adelantados: portal OTP, marketplace B2C, validación con IA, 2FA por dispositivo, garantía en UF/CLP, estadísticas por plan (analítica multi-nivel), tema dual Aurora en todo el sitio incluido el panel. Detalle en [gestion/PROGRESO.md](gestion/PROGRESO.md).
+> **Estado (2026-07-28):** MVP **~97 %** completo (núcleo + ampliación + pulido; resta el recorrido de demostración). Extras de Fase 2 ya adelantados: portal OTP, marketplace B2C, validación con IA, 2FA por dispositivo, garantía en UF/CLP, estadísticas por plan (analítica multi-nivel), tema dual Aurora en todo el sitio incluido el panel. En curso: cuentas multi-usuario Manager/Collaborator ([ADR-0013](decisiones/ADR-0013-cuentas-multiusuario.md)), Fase A completa. Detalle en [gestion/PROGRESO.md](gestion/PROGRESO.md).
 
 ---
 
@@ -45,6 +45,7 @@ Control de tiempos, alcance y calidad.
 | [PROGRESO](gestion/PROGRESO.md) | Checklist vivo: qué está hecho y qué falta, por etapa. |
 | [Matriz de trazabilidad](gestion/matriz-trazabilidad.md) | RF/RNF → estado → implementación en el código → verificación. |
 | [Plan de pruebas y QA](gestion/plan-de-pruebas-qa.md) | Matriz de testing (automatizado + manual) y criterios de aceptación. |
+| [Plan de pruebas — Roles multi-usuario](gestion/plan-de-pruebas-roles-multiusuario.md) | Vara de aceptación de seguridad/flujo/UX para Manager/Collaborator, antes de implementar. |
 | [Matriz de riesgos](gestion/matriz-de-riesgos.md) | Riesgos técnicos, de seguridad, legales y de negocio + mitigaciones. |
 | [Manual de usuario](gestion/manual-de-usuario.md) | Guía de operación para corredor, arrendatario e interesado. |
 | [Auditoría E2E (2026-07)](gestion/auditoria-e2e-2026-07.md) | Auditoría adversarial de los flujos corredor y cliente: hallazgos, causas raíz, soluciones y tests. |
@@ -81,6 +82,9 @@ Registro cronológico de decisiones. Una decisión = un archivo en [`decisiones/
 | [0008](decisiones/ADR-0008-liquidacion-y-ajustes.md) | Liquidación en 2 pasos y ajustes |
 | [0009](decisiones/ADR-0009-garantia-y-reconocimiento-deuda.md) | Mes de garantía y reconocimiento de deuda |
 | [0010](decisiones/ADR-0010-arriendos-por-dias.md) | Arriendos por días (STR) — Fase 2 |
+| [0011](decisiones/ADR-0011-roles-bd-y-rls.md) | Roles de BD (`housing`/`housing_app`) y RLS |
+| [0012](decisiones/ADR-0012-identidad-libreria-y-ia-contrato-externa.md) | Verificación de identidad por librería + IA externa sobre contrato de-identificado |
+| [0013](decisiones/ADR-0013-cuentas-multiusuario.md) | Cuentas multi-usuario (Manager/Collaborator) — Fase A |
 
 ---
 

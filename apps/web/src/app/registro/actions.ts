@@ -279,7 +279,7 @@ export async function registroAction(
 
   // ── 4. Crear Tenant + Usuario en transacción atómica ─────────────────────
   let newUser: {
-    id: string; tenantId: string; rol: "admin" | "operador"; nombre: string; email: string;
+    id: string; tenantId: string; rol: "manager" | "colaborador"; nombre: string; email: string;
   } | null = null;
 
   try {
@@ -300,7 +300,7 @@ export async function registroAction(
       return tx.usuario.create({
         data: {
           tenantId:       tenant.id,
-          rol:            "admin",
+          rol:            "manager",
           nombre,
           rut:            rutCanonical,
           email,

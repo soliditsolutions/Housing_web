@@ -64,7 +64,7 @@ async function main() {
 
   const corredor = await prisma.usuario.create({
     data: {
-      tenantId: tenant.id, rol: "admin",
+      tenantId: tenant.id, rol: "manager",
       nombre:       "María Corredora",
       email:        "maria@corredorademo.cl",
       telefono:     "+56 9 1111 1111",

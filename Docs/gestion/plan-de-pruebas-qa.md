@@ -90,4 +90,4 @@ Formato: **ID · escenario · resultado esperado**. Prioridad 🔴/🟡/🟢.
 
 ---
 
-> Historial de auditorías (seguridad, CRUD, UX): [PROGRESO.md](PROGRESO.md).
+> Historial de auditorías (seguridad, CRUD, UX): [PROGRESO.md](PROGRESO.md). Plan de pruebas específico de la feature de cuentas multi-usuario (Manager/Collaborator, en diseño): [plan-de-pruebas-roles-multiusuario.md](plan-de-pruebas-roles-multiusuario.md).

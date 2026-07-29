@@ -1,32 +1,59 @@
 import { prisma } from "./db";
 import { getSession } from "./auth";
 import { withTenant, type TenantClient } from "./tenant-db";
+import type { Tenant } from "@/generated/prisma/client";
 import { convertirUfAClp, esPeriodoDeReajuste } from "@housing/core";
 
+export type Actor = {
+  usuarioId: string;
+  tenantId:  string;
+  rol:       "manager" | "colaborador";
+  tenant:    Tenant;
+};
+
 /**
- * Obtiene el tenant del usuario autenticado leyendo el `tenantId` del JWT de sesión.
+ * Resuelve el actor autenticado desde el JWT de sesión: valida que el Usuario
+ * siga activo (ADR-0013, cuentas multi-usuario — un Collaborator desactivado
+ * pierde acceso en su próximo request, ya que el JWT es stateless) y devuelve
+ * su Tenant.
  *
  * FIX C1 — Multi-tenancy bypass (IDOR horizontal):
- * La implementación anterior usaba `findFirst({ orderBy: createdAt })`, lo que
- * hacía que todos los usuarios operasen siempre sobre el mismo tenant (el más
- * antiguo). En un escenario multi-tenant cualquier corredor podía leer y
+ * La implementación anterior de getTenant() usaba `findFirst({ orderBy: createdAt })`,
+ * lo que hacía que todos los usuarios operasen siempre sobre el mismo tenant (el
+ * más antiguo). En un escenario multi-tenant cualquier corredor podía leer y
  * modificar datos de otro corredor.
  *
  * La solución correcta es leer el `tenantId` del JWT firmado del usuario activo.
  * El JWT es verificado criptográficamente en cada request → no puede falsificarse.
+ * La consulta a `usuario` va dentro de withTenant() porque la tabla está sujeta
+ * a RLS (tenant_isolation, setup.sql) — sin `app.current_tenant_id` seteado
+ * housing_app vería 0 filas.
  *
  * Uso: Server Actions y API Routes con sesión de usuario autenticado.
  */
-export async function getTenant() {
+export async function getActor(): Promise<Actor> {
   const session = await getSession();
   if (!session) {
     throw new Error("No autenticado — acceso no autorizado.");
   }
-  const t = await prisma.tenant.findUnique({ where: { id: session.tenantId } });
-  if (!t) {
-    throw new Error(`Tenant ${session.tenantId} no encontrado.`);
+  const usuario = await withTenant(session.tenantId, (tx) => tx.usuario.findUnique({
+    where:  { id: session.sub },
+    select: { id: true, tenantId: true, rol: true, desactivadoEn: true, tenant: true },
+  }));
+  if (!usuario || usuario.desactivadoEn !== null) {
+    throw new Error("No autenticado — acceso no autorizado.");
   }
-  return t;
+  return {
+    usuarioId: usuario.id,
+    tenantId:  usuario.tenantId,
+    rol:       usuario.rol,
+    tenant:    usuario.tenant,
+  };
+}
+
+/** Wrapper delgado sobre getActor() — mantiene compatibles los 17+ call sites existentes. */
+export async function getTenant(): Promise<Tenant> {
+  return (await getActor()).tenant;
 }
 
 /**
@@ -209,7 +236,13 @@ export async function getUfCLPTx(tx: TenantClient, fecha: Date): Promise<number>
  */
 /** Variante interna: reutilizable dentro de un `tx` que otra función ya abrió con withTenant. */
 async function marcarPeriodosAtrasadosTx(tx: TenantClient, tenantId: string): Promise<void> {
-  const hoy = new Date();
+  // El corte es la medianoche UTC de HOY, no el instante exacto de la
+  // ejecución — un período que vence hoy sigue "pendiente" durante todo el
+  // día de hoy (el arrendatario aún tiene el día completo para pagar) y
+  // recién pasa a "atrasado" cuando vence el día calendario, no una hora
+  // arbitraria de la corrida (cron, carga de dashboard, etc.).
+  const ahora = new Date();
+  const hoy = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth(), ahora.getUTCDate()));
   await tx.periodoPago.updateMany({
     where: { tenantId, estado: "pendiente", fechaVencimiento: { lt: hoy } },
     data: { estado: "atrasado" },

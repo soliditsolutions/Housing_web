@@ -49,7 +49,10 @@ begin
   foreach t in array array[
     'usuario','persona','propiedad','imagen_propiedad','publicacion','reserva',
     'contrato','periodo_pago','ajuste_liquidacion','pago_entrante','asiento_ledger',
-    'voucher','notificacion','documento','acceso_otp','acceso_log'
+    'voucher','notificacion','documento','acceso_otp','acceso_log','auditoria_equipo'
+    -- invitacion_colaborador NO va aquí a propósito (ADR-0013): sin tenant_id,
+    -- la página de aceptación no tiene sesión todavía cuando la consulta —
+    -- mismo motivo por el que reset_token tampoco está en este arreglo.
   ] loop
     execute format('alter table %I enable row level security;', t);
     execute format('drop policy if exists tenant_isolation on %I;', t);
@@ -108,15 +111,22 @@ create policy public_read_imagen_propiedad on imagen_propiedad
 -- leer las tablas subyacentes por su cuenta. `set search_path = public` evita el
 -- ataque clásico de hijacking de search_path sobre funciones SECURITY DEFINER.
 
+-- desactivado_en (ADR-0013): login/actions.ts rechaza el login (mensaje
+-- genérico, mismo criterio anti-enumeración del resto de este archivo) si
+-- viene no-nulo. Sin este campo un colaborador desactivado podría igual
+-- loguearse — la sesión JWT es stateless, este es el único punto de control.
+-- Postgres no permite CREATE OR REPLACE cuando cambia el tipo de retorno
+-- (columna OUT nueva) — hay que borrar la versión anterior primero.
+drop function if exists auth_lookup_usuario_by_email(text);
 create or replace function auth_lookup_usuario_by_email(p_email text)
 returns table (
   id uuid, tenant_id uuid, rol text, nombre text, email text,
   password_hash text, perfil_completo boolean,
-  failed_attempts int, locked_until timestamptz
+  failed_attempts int, locked_until timestamptz, desactivado_en timestamptz
 )
 language sql security definer set search_path = public as $$
   select id, tenant_id, rol::text, nombre, email,
-         password_hash, perfil_completo, failed_attempts, locked_until
+         password_hash, perfil_completo, failed_attempts, locked_until, desactivado_en
   from usuario where email = p_email limit 1;
 $$;
 

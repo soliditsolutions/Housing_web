@@ -11,12 +11,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { COOKIE_NAME, DEVICE_COOKIE_NAME } from "@/lib/auth";
 
-export async function POST(req: NextRequest) {
+function buildLogoutResponse(req: NextRequest, status: 303 | 307): NextResponse {
   // Redirige al login usando req.url como base (evita hardcodear host/puerto).
-  // El redirect 303 garantiza que el browser procesa Set-Cookie ANTES de navegar,
-  // eliminando la race-condition con window.location.href en el cliente.
   const loginUrl = new URL("/login", req.url);
-  const response = NextResponse.redirect(loginUrl, { status: 303 });
+  const response = NextResponse.redirect(loginUrl, { status });
 
   // 1. Eliminar ambas cookies de sesión explícitamente
   const cookieOpts = {
@@ -36,4 +34,21 @@ export async function POST(req: NextRequest) {
   );
 
   return response;
+}
+
+export async function POST(req: NextRequest) {
+  // El redirect 303 garantiza que el browser procesa Set-Cookie ANTES de navegar,
+  // eliminando la race-condition con window.location.href en el cliente.
+  return buildLogoutResponse(req, 303);
+}
+
+// GET — usado por redirect() desde Server Components (p.ej. panel/layout.tsx
+// cuando detecta un Usuario desactivado, ADR-0013). Un Server Component no
+// puede mutar cookies directamente («Cookies can only be modified in a Server
+// Action or Route Handler»); redirigir aquí es el único lugar donde SÍ se
+// puede limpiar la cookie de sesión antes de mandar al usuario a /login —
+// sin esto, el JWT (firma válida, stateless) seguiría pasando el chequeo de
+// sesión del proxy y lo rebotaría de vuelta a /panel en loop infinito.
+export async function GET(req: NextRequest) {
+  return buildLogoutResponse(req, 307);
 }

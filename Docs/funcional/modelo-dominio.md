@@ -8,7 +8,7 @@
 
 ```
 Tenant (corredora)  [config: ventana_liquidacion_dias, recordatorio_dias_antes]
-  └── Usuario (SOLO corredores: admin/operador; los únicos que se autentican)
+  └── Usuario (SOLO corredores: manager/colaborador — ADR-0013; los únicos que se autentican)
   └── Persona (propietarios y arrendatarios; sin login, son partes/contactos)
   └── Propiedad (datos duros: ubicación, características, gastos comunes, estado)
         └── Publicacion (aviso de marketing; baja si la propiedad no está disponible)

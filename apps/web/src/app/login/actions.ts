@@ -83,13 +83,14 @@ export async function loginAction(
   let user: {
     id:             string;
     tenantId:       string;
-    rol:            "admin" | "operador";
+    rol:            "manager" | "colaborador";
     nombre:         string;
     email:          string;
     passwordHash:   string | null;
     perfilCompleto: boolean;
     failedAttempts: number;
     lockedUntil:    Date | null;
+    desactivadoEn:  Date | null;
   } | null = null;
 
   // ADR-0011 Fase 2: buscar por email es legítimamente cross-tenant (no
@@ -98,9 +99,9 @@ export async function loginAction(
   // darle a housing_app acceso directo a leer toda la tabla usuario.
   try {
     const rows = await prisma.$queryRaw<{
-      id: string; tenant_id: string; rol: "admin" | "operador"; nombre: string; email: string;
+      id: string; tenant_id: string; rol: "manager" | "colaborador"; nombre: string; email: string;
       password_hash: string | null; perfil_completo: boolean;
-      failed_attempts: number; locked_until: Date | null;
+      failed_attempts: number; locked_until: Date | null; desactivado_en: Date | null;
     }[]>`SELECT * FROM auth_lookup_usuario_by_email(${email})`;
     const row = rows[0];
     user = row ? {
@@ -113,6 +114,7 @@ export async function loginAction(
       perfilCompleto: row.perfil_completo,
       failedAttempts: row.failed_attempts,
       lockedUntil:    row.locked_until,
+      desactivadoEn:  row.desactivado_en,
     } : null;
   } catch {
     return { error: "Error al conectar con el servidor. Intenta de nuevo." };
@@ -180,6 +182,13 @@ export async function loginAction(
       };
     }
     return { error: "Email o contraseña incorrectos." };
+  }
+
+  // ── Collaborator desactivado (ADR-0013) ─────────────────────────────────
+  // Mensaje genérico, mismo criterio anti-enumeración del resto del archivo:
+  // solo se revela después de validar la contraseña, nunca antes.
+  if (user.desactivadoEn) {
+    return { error: "Esta cuenta no tiene acceso. Contacta al administrador de tu cuenta." };
   }
 
   // ── Login exitoso: resetear contadores y crear sesión ──────────────────

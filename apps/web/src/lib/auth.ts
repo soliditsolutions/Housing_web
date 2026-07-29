@@ -9,7 +9,7 @@ import { cookies } from "next/headers";
 export type SessionPayload = JWTPayload & {
   sub:            string; // usuarioId
   tenantId:       string;
-  rol:            "admin" | "operador";
+  rol:            "manager" | "colaborador";
   nombre:         string;
   email:          string;
   perfilCompleto: boolean;

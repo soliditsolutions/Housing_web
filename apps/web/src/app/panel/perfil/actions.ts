@@ -1,10 +1,12 @@
 "use server";
 
+import { randomInt, createHash } from "crypto";
 import { prisma }          from "@/lib/db";
 import { withTenant }      from "@/lib/tenant-db";
 import { getSession, signSession, setSessionCookie } from "@/lib/auth";
 import { verifyPassword, hashPassword } from "@/lib/password";
 import { evaluatePassword }             from "@/lib/password-strength";
+import { sendCambioContactoCodeEmail }  from "@/lib/email";
 
 class DomainError extends Error {
   constructor(msg: string) { super(msg); this.name = "DomainError"; }
@@ -49,6 +51,18 @@ export async function guardarPerfilAction(
   const region          = formData.get("region")?.toString().trim()            ?? "";
   const fotoPerfil      = formData.get("fotoPerfil")?.toString().trim()        ?? "";
 
+  // ── Identidad ya verificada — RUT y fecha de nacimiento se fijan una sola
+  // vez y quedan inmutables (mismo criterio que nombre/email, que ya eran
+  // read-only). El RUT fue cruzado contra la cédula en /registro; permitir
+  // cambiarlo después invalidaría esa verificación. Se compara contra la fila
+  // real en BD (no solo se confía en que el cliente respete el `readOnly` del
+  // input) — defensa en profundidad ante manipulación directa del formulario.
+  const actual = await withTenant(session.tenantId, (tx) => tx.usuario.findUnique({
+    where:  { id: session.sub },
+    select: { rut: true, fechaNacimiento: true, telefono: true },
+  }));
+  if (!actual) return { ok: false, error: "Sesión inválida. Vuelve a iniciar sesión." };
+
   // ── Validaciones ──────────────────────────────────────────────────────────
 
   if (!rut) {
@@ -57,18 +71,25 @@ export async function guardarPerfilAction(
   if (!validateRut(rut)) {
     return { ok: false, error: "El RUT no es válido. Verifica el dígito verificador.", field: "rut" };
   }
+  const rutCanonical = canonicalRut(rut);
 
-  // Unicidad: otro usuario ya registrado con ese RUT — usuario.rut es único
-  // GLOBAL (no por tenant, ver setup.sql sección 4), así que este chequeo es
+  if (actual.rut && actual.rut !== rutCanonical) {
+    return { ok: false, error: "El RUT no se puede modificar una vez verificado.", field: "rut" };
+  }
+
+  // Unicidad: solo aplica la primera vez que se fija (actual.rut === null) —
+  // otro usuario ya registrado con ese RUT. usuario.rut es único GLOBAL (no
+  // por tenant, ver setup.sql sección 4), así que este chequeo es
   // legítimamente cross-tenant. Igual que en login/registro, se resuelve con
   // una función SECURITY DEFINER de alcance mínimo, no dándole a housing_app
   // acceso directo a leer la tabla usuario completa (ver ADR-0011 Fase 2).
-  const rutCanonical = canonicalRut(rut);
-  const rutDupeRows = await prisma.$queryRaw<{ existe: boolean }[]>`
-    SELECT auth_rut_pertenece_a_otro_usuario(${rutCanonical}, ${session.sub}::uuid) AS existe
-  `.catch(() => null);
-  if (rutDupeRows?.[0]?.existe) {
-    return { ok: false, error: "Este RUT ya está registrado en otra cuenta.", field: "rut" };
+  if (!actual.rut) {
+    const rutDupeRows = await prisma.$queryRaw<{ existe: boolean }[]>`
+      SELECT auth_rut_pertenece_a_otro_usuario(${rutCanonical}, ${session.sub}::uuid) AS existe
+    `.catch(() => null);
+    if (rutDupeRows?.[0]?.existe) {
+      return { ok: false, error: "Este RUT ya está registrado en otra cuenta.", field: "rut" };
+    }
   }
 
   if (!telefono) {
@@ -77,6 +98,17 @@ export async function guardarPerfilAction(
   if (!/^\+?[\d\s\-().]{7,20}$/.test(telefono)) {
     return { ok: false, error: "Formato de teléfono inválido.", field: "telefono" };
   }
+  // Una vez fijado por primera vez, el teléfono solo se cambia por el flujo
+  // con código de verificación (solicitarCambioContactoAction) — este action
+  // ya no acepta un cambio directo, para que ese canal quede protegido igual
+  // que el correo.
+  if (actual.telefono && actual.telefono !== telefono) {
+    return {
+      ok: false,
+      error: "Para cambiar tu teléfono usa la opción \"Cambiar\" junto al campo — requiere un código de verificación.",
+      field: "telefono",
+    };
+  }
 
   if (!fechaNacStr) {
     return { ok: false, error: "La fecha de nacimiento es obligatoria.", field: "fechaNacimiento" };
@@ -84,6 +116,9 @@ export async function guardarPerfilAction(
   const fechaNac = new Date(fechaNacStr + "T00:00:00Z");
   if (isNaN(fechaNac.getTime())) {
     return { ok: false, error: "Fecha de nacimiento inválida.", field: "fechaNacimiento" };
+  }
+  if (actual.fechaNacimiento && actual.fechaNacimiento.getTime() !== fechaNac.getTime()) {
+    return { ok: false, error: "La fecha de nacimiento no se puede modificar una vez guardada.", field: "fechaNacimiento" };
   }
   // Debe tener al menos 18 años
   const hoy18 = new Date();
@@ -216,4 +251,185 @@ export async function cambiarPasswordAction(
   }
 
   return { ok: true };
+}
+
+// ── Cambiar teléfono/correo (código de 6 dígitos al correo actual) ──────────
+// Mismo patrón que /api/auth/dispositivo/enviar + /confirmar (CodigoDispositivo):
+// hash sha256(código + AUTH_SECRET), expira a los 10 min, máx. 3 intentos,
+// rate limit 1/min + 5/10min por usuario. La diferencia clave: el código
+// siempre se envía al correo YA VERIFICADO de la sesión, nunca al valor nuevo
+// — eso es lo que prueba que quien pide el cambio sigue teniendo acceso a la
+// cuenta antes de aceptar el dato nuevo.
+
+export type CampoContacto = "telefono" | "email";
+
+export type SolicitarCambioContactoState =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export type ConfirmarCambioContactoState =
+  | { ok: true; valorNuevo: string }
+  | { ok: false; error: string };
+
+function hashOtpCode(code: string): string {
+  const secret = process.env.AUTH_SECRET ?? "";
+  return createHash("sha256").update(code + secret).digest("hex");
+}
+
+export async function solicitarCambioContactoAction(
+  campo: CampoContacto,
+  valorNuevoRaw: string,
+): Promise<SolicitarCambioContactoState> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "Sesión expirada. Vuelve a iniciar sesión." };
+
+  const valorNuevo = campo === "email"
+    ? valorNuevoRaw.trim().toLowerCase()
+    : valorNuevoRaw.trim();
+
+  if (campo === "telefono") {
+    if (!/^\+?[\d\s\-().]{7,20}$/.test(valorNuevo)) {
+      return { ok: false, error: "Formato de teléfono inválido." };
+    }
+    const actual = await withTenant(session.tenantId, (tx) => tx.usuario.findUnique({
+      where: { id: session.sub }, select: { telefono: true },
+    }));
+    if (actual?.telefono === valorNuevo) {
+      return { ok: false, error: "Ya es tu teléfono actual." };
+    }
+  } else {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valorNuevo)) {
+      return { ok: false, error: "El correo electrónico no es válido." };
+    }
+    if (valorNuevo === session.email) {
+      return { ok: false, error: "Ya es tu correo actual." };
+    }
+    // Unicidad global — misma función SECURITY DEFINER que usa /registro.
+    const rows = await prisma.$queryRaw<{ existe: boolean }[]>`
+      SELECT auth_email_existe(${valorNuevo}) AS existe
+    `.catch(() => null);
+    if (rows?.[0]?.existe) {
+      return { ok: false, error: "Ya existe una cuenta con ese correo." };
+    }
+  }
+
+  // ── Rate limiting — mismas ventanas que dispositivo/enviar ───────────────
+  const ahora     = new Date();
+  const hace1min  = new Date(ahora.getTime() - 60 * 1000);
+  const hace10min = new Date(ahora.getTime() - 10 * 60 * 1000);
+
+  const [reciente, totalRecientes] = await Promise.all([
+    prisma.codigoCambioContacto.findFirst({
+      where: { usuarioId: session.sub, createdAt: { gt: hace1min } },
+    }),
+    prisma.codigoCambioContacto.count({
+      where: { usuarioId: session.sub, createdAt: { gt: hace10min } },
+    }),
+  ]);
+
+  if (reciente) {
+    return { ok: false, error: "Espera al menos 1 minuto antes de solicitar otro código." };
+  }
+  if (totalRecientes >= 5) {
+    return { ok: false, error: "Demasiados intentos. Espera antes de volver a intentarlo." };
+  }
+
+  const codigo     = randomInt(100000, 1000000).toString().padStart(6, "0");
+  const codigoHash = hashOtpCode(codigo);
+  const expiraAt   = new Date(Date.now() + 10 * 60 * 1000);
+
+  try {
+    await prisma.$transaction([
+      prisma.codigoCambioContacto.deleteMany({
+        where: { usuarioId: session.sub, campo, usadoAt: null },
+      }),
+      prisma.codigoCambioContacto.create({
+        data: { usuarioId: session.sub, campo, valorNuevo, codigoHash, expiraAt },
+      }),
+    ]);
+    await sendCambioContactoCodeEmail(session.email, session.nombre, codigo, campo, valorNuevo);
+  } catch {
+    return { ok: false, error: "No se pudo enviar el código. Intenta de nuevo." };
+  }
+
+  return { ok: true };
+}
+
+export async function confirmarCambioContactoAction(
+  campo: CampoContacto,
+  codigoIngresado: string,
+): Promise<ConfirmarCambioContactoState> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "Sesión expirada. Vuelve a iniciar sesión." };
+
+  const codigo = codigoIngresado.trim();
+  if (!/^\d{6}$/.test(codigo)) {
+    return { ok: false, error: "El código debe tener 6 dígitos." };
+  }
+
+  const registro = await prisma.codigoCambioContacto.findFirst({
+    where:   { usuarioId: session.sub, campo, usadoAt: null },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
+
+  if (!registro) {
+    return { ok: false, error: "No hay código activo. Solicita uno nuevo." };
+  }
+  if (registro.expiraAt <= new Date()) {
+    return { ok: false, error: "Tu código ha expirado. Solicita uno nuevo." };
+  }
+  if (registro.intentos >= 3) {
+    return { ok: false, error: "Demasiados intentos. Solicita un nuevo código." };
+  }
+
+  const { intentos: intentosUsados } = await prisma.codigoCambioContacto.update({
+    where:  { id: registro.id },
+    data:   { intentos: { increment: 1 } },
+    select: { intentos: true },
+  });
+
+  const codigoHash = hashOtpCode(codigo);
+  if (registro.codigoHash !== codigoHash) {
+    if (intentosUsados >= 3) {
+      await prisma.codigoCambioContacto.update({
+        where: { id: registro.id },
+        data:  { usadoAt: new Date() },
+      });
+      return { ok: false, error: "Demasiados intentos. Solicita un nuevo código." };
+    }
+    const restantes = 3 - intentosUsados;
+    return {
+      ok:    false,
+      error: `Código incorrecto. ${restantes} intento${restantes !== 1 ? "s" : ""} restante${restantes !== 1 ? "s" : ""}.`,
+    };
+  }
+
+  try {
+    await withTenant(session.tenantId, (tx) => tx.usuario.update({
+      where: { id: session.sub },
+      data:  campo === "telefono"
+        ? { telefono: registro.valorNuevo }
+        : { email: registro.valorNuevo },
+    }));
+    await prisma.codigoCambioContacto.update({
+      where: { id: registro.id },
+      data:  { usadoAt: new Date() },
+    });
+  } catch {
+    return { ok: false, error: "No se pudo aplicar el cambio. Intenta de nuevo." };
+  }
+
+  if (campo === "email") {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- se destructuran para excluirlos de `rest`, no para usarlos
+      const { iat: _iat, exp: _exp, ...rest } = session;
+      const newToken = await signSession({ ...rest, email: registro.valorNuevo });
+      await setSessionCookie(newToken);
+    } catch {
+      // Si falla el refresh del JWT, el correo ya cambió en BD — el usuario
+      // simplemente re-loguea con el correo nuevo la próxima vez.
+    }
+  }
+
+  return { ok: true, valorNuevo: registro.valorNuevo };
 }
