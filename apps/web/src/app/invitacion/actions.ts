@@ -7,6 +7,7 @@ import { hashToken }                     from "@/lib/token";
 import { hashPassword }                  from "@/lib/password";
 import { evaluatePassword }              from "@/lib/password-strength";
 import { signSession, setSessionCookie } from "@/lib/auth";
+import { getCupoUsuarios }               from "@/lib/plans";
 
 export type AceptarInvitacionState = { error: string; field?: string } | null;
 
@@ -67,6 +68,29 @@ export async function aceptarInvitacionAction(
   `;
   if (emailRows[0]?.existe) {
     return { error: "Ya existe una cuenta con este correo electrónico." };
+  }
+
+  // ADR-0013 (Fase E) — revalidar el cupo del plan al ACEPTAR, no solo al
+  // invitar. Esta invitación ya contaba como "pendiente" en el cupo del
+  // Manager (contarCupoUsado() en panel/equipo/actions.ts), así que
+  // convertirla en un Colaborador activo no aumenta el total ocupado — pero
+  // si el Manager bajó de plan mientras la invitación seguía viva, el cupo
+  // actual puede ya estar completo solo con el Manager + los colaboradores
+  // ya activos. Sin este chequeo, una invitación enviada bajo un plan más
+  // alto se podría aceptar igual y dejar al tenant con más usuarios activos
+  // de los que su plan actual permite.
+  const tenantParaCupo = await withTenant(tenantId, (tx) => tx.tenant.findUnique({
+    where: { id: tenantId }, select: { plan: true },
+  }));
+  const activosParaCupo = await withTenant(tenantId, (tx) => tx.usuario.count({
+    where: { tenantId, rol: "colaborador", desactivadoEn: null },
+  }));
+  const cupoMax   = getCupoUsuarios(tenantParaCupo?.plan ?? null);
+  const cupoUsado = 1 + activosParaCupo; // 1 = el Manager
+  if (cupoUsado >= cupoMax) {
+    return {
+      error: "El cupo de usuarios del plan de esta cuenta ya está completo. Contacta a tu administrador para que libere un cupo o mejore su plan, y vuelve a intentarlo.",
+    };
   }
 
   let newUser: { id: string; tenantId: string; rol: "manager" | "colaborador"; nombre: string; email: string };
