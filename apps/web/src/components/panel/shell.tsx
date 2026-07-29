@@ -160,7 +160,7 @@ export function PanelShell({ tenant, user, children }: Props) {
         className="flex-1 overflow-y-auto overflow-x-hidden"
         onClick={() => setSidebarOpen(false)}
       >
-        <Nav collapsed={!isMobile && collapsed} />
+        <Nav collapsed={!isMobile && collapsed} isManager={user.rol === "manager"} />
       </div>
 
       {/* Footer tenant + user */}

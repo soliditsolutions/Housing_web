@@ -15,6 +15,7 @@ import { REGIONES_CHILE, getComunasDeRegion } from "@housing/core";
 import type { PerfilState, PasswordState, CampoContacto } from "./actions";
 import { evaluatePassword }        from "@/lib/password-strength";
 import { useToast }                from "@/components/ui/toast";
+import { validateRut, formatRut }  from "@/lib/rut";
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -550,7 +551,19 @@ export function PerfilForm({ perfil, section = "datos" }: { perfil: PerfilData; 
   const [region, setRegion]         = useState(perfil.region ?? "");
   const [ciudad, setCiudad]         = useState(perfil.ciudad ?? "");
   const comunasDisponibles          = useMemo(() => getComunasDeRegion(region), [region]);
-  const rut = perfil.rut ?? "";
+  // El Manager siempre llega con RUT ya fijado (verificado contra la cédula
+  // en /registro), pero un Collaborator invitado (ADR-0013) no pasa por esa
+  // verificación y empieza con rut=null — debe poder fijarlo una vez, igual
+  // que fechaNacimiento. Una vez fijado (Manager o Collaborator), queda
+  // inmutable (server-side en guardarPerfilAction, esto es solo la UI).
+  const rutBloqueado = !!perfil.rut;
+  const [rutInput, setRutInput] = useState(perfil.rut ?? "");
+  const rutInlineError = !rutBloqueado && rutInput.length > 3 && !validateRut(rutInput) ? "RUT inválido" : null;
+
+  function handleRutChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const raw = e.target.value.replace(/[^0-9kK]/g, "");
+    setRutInput(raw.length > 1 ? formatRut(raw) : raw);
+  }
 
   useEffect(() => {
     if (!state) return;
@@ -650,13 +663,28 @@ export function PerfilForm({ perfil, section = "datos" }: { perfil: PerfilData; 
               <div className="relative">
                 <input
                   id="rut" name="rut" type="text"
-                  value={rut} readOnly
-                  style={{ ...inputBase, opacity: 0.55, cursor: "not-allowed", paddingRight: "38px" }}
+                  inputMode="numeric" autoComplete="off" maxLength={12}
+                  value={rutInput}
+                  readOnly={rutBloqueado}
+                  disabled={rutBloqueado ? undefined : pending}
+                  onChange={rutBloqueado ? undefined : handleRutChange}
+                  placeholder={rutBloqueado ? undefined : "12.345.678-9"}
+                  required={!rutBloqueado}
+                  style={{
+                    ...inputBase,
+                    paddingRight: "38px",
+                    ...(rutBloqueado
+                      ? { opacity: 0.55, cursor: "not-allowed" }
+                      : { borderColor: (rutInlineError || fieldError("rut")) ? "var(--hw-danger)" : undefined }),
+                  }}
+                  {...(rutBloqueado ? {} : focusHandlers)}
                 />
-                <Lock className="pointer-events-none absolute right-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" style={{ color: "var(--hw-text-4)" }} aria-hidden="true" />
+                {rutBloqueado && (
+                  <Lock className="pointer-events-none absolute right-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" style={{ color: "var(--hw-text-4)" }} aria-hidden="true" />
+                )}
               </div>
-              {fieldError("rut") && (
-                <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("rut")}</p>
+              {(rutInlineError || fieldError("rut")) && (
+                <p className="text-xs" style={{ color: "var(--hw-danger)" }}>{fieldError("rut") ?? rutInlineError}</p>
               )}
             </div>
           </div>

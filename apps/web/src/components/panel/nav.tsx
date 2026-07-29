@@ -3,7 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Building2, FileText, Wallet, Bell, UserCog, House, ReceiptText, BarChart3 } from "lucide-react";
+import { LayoutDashboard, Building2, FileText, Wallet, Bell, UserCog, House, ReceiptText, BarChart3, Users } from "lucide-react";
 
 const items = [
   { href: "/panel",                label: "Resumen",        icon: LayoutDashboard },
@@ -19,6 +19,11 @@ const itemsSecundarios = [
   { href: "/",             label: "Ir al inicio", icon: House   },
   { href: "/panel/perfil", label: "Mi perfil",    icon: UserCog },
 ];
+
+// ADR-0013 (cuentas multi-usuario) — visible solo para el Manager, dueño de
+// la cuenta; el proxy además rechaza la ruta directamente para cualquier
+// Collaborator que intente navegar ahí a mano.
+const itemEquipo = { href: "/panel/equipo", label: "Equipo", icon: Users };
 
 function NavLink({
   href,
@@ -70,8 +75,11 @@ function NavLink({
   );
 }
 
-export function Nav({ collapsed = false }: { collapsed?: boolean }) {
+export function Nav({ collapsed = false, isManager = false }: { collapsed?: boolean; isManager?: boolean }) {
   const path = usePathname();
+  const secundarios = isManager
+    ? [itemsSecundarios[0], itemEquipo, itemsSecundarios[1]]
+    : itemsSecundarios;
 
   return (
     <nav
@@ -105,9 +113,9 @@ export function Nav({ collapsed = false }: { collapsed?: boolean }) {
         style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}
       />
 
-      {/* Navegación secundaria (Ir al inicio, Mi perfil) — al final */}
+      {/* Navegación secundaria (Ir al inicio, Equipo si es manager, Mi perfil) — al final */}
       <div className="space-y-0.5">
-        {itemsSecundarios.map((it) => {
+        {secundarios.map((it) => {
           const active = it.href === "/" ? path === "/" : path.startsWith(it.href);
           return (
             <NavLink

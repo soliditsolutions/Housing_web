@@ -94,6 +94,23 @@ describe("Nav — aria-label en modo colapsado (UI-C6)", () => {
   });
 });
 
+describe("Nav — ítem Equipo solo para manager (ADR-0013)", () => {
+  it("sin isManager, el link de Equipo NO aparece", () => {
+    render(<Nav />);
+    expect(screen.queryByText("Equipo")).not.toBeInTheDocument();
+  });
+
+  it("con isManager=true, el link de Equipo aparece entre Ir al inicio y Mi perfil", () => {
+    const { container } = render(<Nav isManager={true} />);
+    const labels = Array.from(container.querySelectorAll("a")).map(textOrLabel);
+    const iInicio = labels.findIndex((t) => t.includes("Ir al inicio"));
+    const iEquipo = labels.findIndex((t) => t.includes("Equipo"));
+    const iPerfil = labels.findIndex((t) => t.includes("Mi perfil"));
+    expect(iEquipo).toBeGreaterThan(iInicio);
+    expect(iEquipo).toBeLessThan(iPerfil);
+  });
+});
+
 describe("Nav — aria-current en ítem activo", () => {
   it("el ítem activo (Resumen en /panel) tiene aria-current='page'", () => {
     render(<Nav />);

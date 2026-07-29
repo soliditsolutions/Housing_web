@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { prisma } from "./db";
 import { getSession } from "./auth";
 import { withTenant, type TenantClient } from "./tenant-db";
@@ -34,14 +35,19 @@ export type Actor = {
 export async function getActor(): Promise<Actor> {
   const session = await getSession();
   if (!session) {
-    throw new Error("No autenticado — acceso no autorizado.");
+    redirect("/login");
   }
   const usuario = await withTenant(session.tenantId, (tx) => tx.usuario.findUnique({
     where:  { id: session.sub },
     select: { id: true, tenantId: true, rol: true, desactivadoEn: true, tenant: true },
   }));
   if (!usuario || usuario.desactivadoEn !== null) {
-    throw new Error("No autenticado — acceso no autorizado.");
+    // ADR-0013 — mismo caso que el guard de panel/layout.tsx (un Collaborator
+    // desactivado no debe ver un error crudo), pero Next.js ejecuta el layout
+    // y la page en paralelo, así que una page que llega a getActor() primero
+    // puede ganarle la carrera al redirect() del layout. Este redirect (en
+    // vez de throw) es la garantía real, no solo defensa en profundidad.
+    redirect("/api/auth/logout");
   }
   return {
     usuarioId: usuario.id,

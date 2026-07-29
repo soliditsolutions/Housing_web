@@ -411,6 +411,52 @@ export async function sendDeviceCodeEmail(
   });
 }
 
+/** Invita a un colaborador a unirse a la cuenta del corredor (ADR-0013). */
+export async function sendCollaboratorInviteEmail(
+  email: string,
+  nombre: string,
+  rawToken: string,
+  nombreEmpresa: string,
+): Promise<void> {
+  const link = `${APP_URL}/invitacion?token=${encodeURIComponent(rawToken)}`;
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log("\n──────────────────────────────────────────────────────");
+    console.log("📧  EMAIL SIMULADO — Invitación a colaborador");
+    console.log(`    Para     : ${email} (${nombre})`);
+    console.log(`    Empresa  : ${nombreEmpresa}`);
+    console.log(`    Enlace   : ${link}`);
+    console.log(`    Válido   : 7 días`);
+    console.log("──────────────────────────────────────────────────────\n");
+    return;
+  }
+
+  const resend = await getResend();
+  await resend.emails.send({
+    from:    "Housing SOLIDIT <no-reply@solidit.cl>",
+    to:      email,
+    subject: `${nombreEmpresa} te invitó a unirte en Housing`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="margin:0 0 8px;color:#0F172A">Hola, ${nombre}</h2>
+        <p style="color:#475569"><strong>${nombreEmpresa}</strong> te invitó a colaborar en la gestión de sus propiedades en Housing.</p>
+        <div style="margin:24px 0">
+          <a href="${link}" style="display:inline-block;background:#2563EB;color:#fff;font-weight:600;padding:12px 24px;border-radius:8px;text-decoration:none">
+            Aceptar invitación
+          </a>
+        </div>
+        <p style="font-size:13px;color:#64748B">
+          El enlace expira en <strong>7 días</strong> y solo puede usarse una vez.<br>
+          Si no esperabas esta invitación, ignora este correo.
+        </p>
+        <p style="font-size:11px;color:#94A3B8;margin-top:16px">
+          Si el botón no funciona, copia este enlace: ${link}
+        </p>
+      </div>
+    `,
+  });
+}
+
 /** Envía el código de confirmación para cambiar teléfono o correo desde Mi perfil. */
 export async function sendCambioContactoCodeEmail(
   email: string,

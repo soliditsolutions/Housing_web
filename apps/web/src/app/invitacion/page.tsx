@@ -1,0 +1,135 @@
+import type { Metadata } from "next";
+import { ShieldCheck } from "lucide-react";
+import { prisma }        from "@/lib/db";
+import { hashToken }     from "@/lib/token";
+import { InvitacionForm } from "./invitacion-form";
+import { InvitacionInvalidDialog } from "./invalid-dialog";
+
+export const metadata: Metadata = {
+  title: "Aceptar invitación — Housing",
+};
+
+export default async function InvitacionPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ token?: string }>;
+}) {
+  const { token } = await searchParams;
+
+  let invalidMensaje: string | null = null;
+  let nombre = "";
+  let email  = "";
+  let empresa = "";
+
+  if (!token) {
+    invalidMensaje = "No se proporcionó un enlace de invitación.";
+  } else {
+    const tokenHash  = await hashToken(token);
+    const invitacion = await prisma.invitacionColaborador.findFirst({
+      where: {
+        tokenHash,
+        usadoEn:   null,
+        expiresAt: { gt: new Date() },
+      },
+      select: { nombre: true, email: true, invitadoPorId: true },
+    });
+    if (!invitacion) {
+      invalidMensaje = "La invitación ha expirado o ya fue utilizada. Pide a tu administrador que te reenvíe una nueva.";
+    } else {
+      nombre = invitacion.nombre;
+      email  = invitacion.email;
+
+      // `invitadoPor` (Usuario) está protegido por RLS — no se puede incluir
+      // directamente desde este contexto sin sesión/tenant conocido. Se
+      // resuelve igual que en actions.ts: la función SECURITY DEFINER
+      // auth_tenant_de_usuario() para el tenantId, y `tenant` (sin RLS, es
+      // la raíz del tenant) para el nombre a mostrar.
+      const tenantRows = await prisma.$queryRaw<{ tenant_id: string | null }[]>`
+        SELECT auth_tenant_de_usuario(${invitacion.invitadoPorId}::uuid) AS tenant_id
+      `;
+      const tenantId = tenantRows[0]?.tenant_id;
+      const tenant   = tenantId
+        ? await prisma.tenant.findUnique({ where: { id: tenantId }, select: { nombre: true } })
+        : null;
+      empresa = tenant?.nombre ?? "";
+    }
+  }
+
+  return (
+    <>
+      <div className="relative min-h-screen overflow-hidden" style={{ background: "var(--hw-page)" }}>
+        <div className="hw-aurora-layer" aria-hidden="true" />
+
+        <div className="relative z-10 flex min-h-screen">
+          <aside
+            className="hw-auth-aside hidden lg:flex flex-col justify-between w-[420px] xl:w-[480px] shrink-0 p-10"
+            aria-hidden="true"
+          >
+            <div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-bold tracking-tight" style={{ color: "var(--hw-sidebar-text)" }}>
+                  Housing
+                </span>
+                <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.35)" }}>
+                  SOLIDIT
+                </span>
+              </div>
+              <p className="mt-1 text-sm" style={{ color: "var(--hw-sidebar-muted)" }}>
+                Panel del corredor
+              </p>
+
+              <div className="mt-10 mb-8" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }} />
+
+              <h1 className="text-3xl font-bold leading-snug tracking-tight" style={{ color: "var(--hw-sidebar-text)" }}>
+                Te invitaron a{" "}
+                <span style={{ color: "var(--hw-primary-bd)" }}>colaborar.</span>
+              </h1>
+              <p className="mt-4 text-sm leading-relaxed" style={{ color: "var(--hw-sidebar-muted)" }}>
+                {empresa
+                  ? `${empresa} te invitó a gestionar propiedades en Housing. Define tu contraseña para empezar.`
+                  : "Define tu contraseña para empezar a colaborar en Housing."}
+              </p>
+            </div>
+
+            <div>
+              <div className="mb-5" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }} />
+              <div
+                className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs"
+                style={{ background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.40)" }}
+              >
+                <ShieldCheck className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--hw-success)" }} />
+                Ley 21.719 · Protección de datos personales · Chile
+              </div>
+            </div>
+          </aside>
+
+          <main className="flex flex-1 flex-col items-center justify-center px-6 py-12">
+            {!invalidMensaje && token && (
+              <div className="w-full max-w-sm">
+                <div className="mb-8 flex items-baseline gap-2 lg:hidden">
+                  <span className="text-xl font-bold tracking-tight" style={{ color: "var(--hw-text-1)" }}>Housing</span>
+                  <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: "var(--hw-text-4)" }}>SOLIDIT</span>
+                </div>
+
+                <div className="mb-8">
+                  <h2 className="text-2xl font-bold tracking-tight" style={{ color: "var(--hw-text-1)" }}>
+                    Hola, {nombre}
+                  </h2>
+                  <p className="mt-1 text-sm" style={{ color: "var(--hw-text-3)" }}>
+                    Define una contraseña para tu cuenta en <strong>{email}</strong>.
+                  </p>
+                </div>
+
+                <div className="hw-auth-card p-6">
+                  <InvitacionForm token={token} />
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      </div>
+
+      {invalidMensaje && <InvitacionInvalidDialog mensaje={invalidMensaje} />}
+    </>
+  );
+}

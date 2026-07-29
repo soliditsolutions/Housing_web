@@ -66,7 +66,8 @@ export async function proxy(request: NextRequest) {
   const isAuthPage =
     pathname.startsWith("/login") ||
     pathname.startsWith("/registro") ||
-    pathname.startsWith("/recuperar-contrasena");
+    pathname.startsWith("/recuperar-contrasena") ||
+    pathname.startsWith("/invitacion");
 
   if (isAuthPage && session) {
     if (session.deviceToken) {
@@ -102,6 +103,12 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL("/panel/perfil?setup=1", request.url));
     }
 
+    // ADR-0013 (cuentas multi-usuario) — /panel/equipo es exclusiva del
+    // Manager. session.rol viaja en el JWT firmado, no requiere consulta a BD.
+    if (pathname.startsWith("/panel/equipo") && session.rol !== "manager") {
+      return NextResponse.redirect(new URL("/panel", request.url));
+    }
+
     const deviceCookie = request.cookies.get(DEVICE_COOKIE_NAME)?.value;
     const jwtDevice    = session.deviceToken;
 
@@ -129,6 +136,7 @@ export const config = {
     "/login/:path*", "/login",
     "/registro",
     "/recuperar-contrasena",
+    "/invitacion",
     "/portal/contrato/:path*",
   ],
 };

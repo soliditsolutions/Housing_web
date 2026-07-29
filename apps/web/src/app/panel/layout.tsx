@@ -18,9 +18,10 @@ export default async function PanelLayout({
   // es stateless, así que esto se valida contra la fila real en cada carga
   // del panel — mismo choke point que ya usa el middleware, único lugar por
   // el que pasan TODAS las páginas de /panel/*. getActor()/getTenant() (usado
-  // más abajo en el árbol) también rechazan al usuario desactivado, pero
-  // solo con un throw — este chequeo aquí es lo que convierte eso en una
-  // salida limpia antes de llegar a renderizar cualquier página.
+  // más abajo en el árbol) hacen el mismo redirect por su cuenta — Next.js
+  // ejecuta layout y page en paralelo, así que una page puede ganarle la
+  // carrera a este chequeo; este bloque no es la única garantía, es defensa
+  // en profundidad redundante con la de getActor().
   //
   // Un Server Component no puede mutar cookies (`clearSessionCookie()`
   // lanzaría "Cookies can only be modified in a Server Action or Route
