@@ -31,7 +31,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/panel",
 }));
 
-const PRIMARY_LABELS   = ["Resumen", "Propiedades", "Contratos", "Cobros", "Vouchers", "Notificaciones"];
+const PRIMARY_LABELS   = ["Resumen", "Propiedades", "Contratos", "Cobros", "Estadísticas", "Vouchers", "Notificaciones"];
 const SECONDARY_LABELS = ["Ir al inicio", "Mi perfil"];
 
 // Helper: texto visible o aria-label del elemento
