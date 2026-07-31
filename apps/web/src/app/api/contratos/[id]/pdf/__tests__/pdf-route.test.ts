@@ -34,7 +34,7 @@ vi.mock("@/lib/db", () => {
 const { GET } = await import("../route");
 
 const CONTRATO_BASE = {
-  id: "contrato-1", denominacion: "UF", valorArriendo: "24.5", diaVencimiento: 5,
+  id: "contrato-1", estado: "borrador", denominacion: "UF", valorArriendo: "24.5", diaVencimiento: 5,
   reajuste: "anual", moraTasaPct: "3", moraDiasGracia: 5,
   garantiaMeses: "0", garantiaDenominacion: null, garantiaMontoBase: null,
   fechaInicio: new Date("2026-01-01"), fechaFin: null,
@@ -84,5 +84,12 @@ describe("GET /api/contratos/[id]/pdf", () => {
     mockContratoFindFirst.mockResolvedValue(CONTRATO_BASE);
     const res = await req();
     expect(res.status).toBe(200);
+  });
+
+  it("409 si el contrato ya no está en borrador (ya se activó — la firma real ocurrió fuera del sistema)", async () => {
+    mockGetActor.mockResolvedValue({ usuarioId: "manager-1", tenantId: "tenant-1", rol: "manager", tenant: { nombre: "Corredora" } });
+    mockContratoFindFirst.mockResolvedValue({ ...CONTRATO_BASE, estado: "vigente" });
+    const res = await req();
+    expect(res.status).toBe(409);
   });
 });

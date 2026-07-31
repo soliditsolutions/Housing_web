@@ -120,7 +120,13 @@ export default async function ContratoDetallePage({
       <PageTitle
         title={detalle.propiedad.direccion}
         subtitle={[detalle.propiedad.comuna, detalle.propiedad.tipo].filter(Boolean).join(" · ")}
-        action={
+        // Solo antes de activar: "vigente" significa que ya existe un contrato
+        // firmado de verdad fuera del sistema (ver FirmaSection — activar exige
+        // confirmar que ambas partes ya firmaron). Ofrecer un PDF marcado
+        // "BORRADOR" para un contrato ya vigente es confuso en el mejor caso, y
+        // en el peor puede no coincidir con lo que realmente se firmó si un
+        // abogado ajustó algo entre el borrador y la firma real.
+        action={detalle.estado === "borrador" ? (
           <a
             href={`/api/contratos/${detalle.id}/pdf`}
             className="hw-btn inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold"
@@ -132,7 +138,7 @@ export default async function ContratoDetallePage({
             <Download className="h-3.5 w-3.5" aria-hidden="true" />
             Descargar borrador (PDF)
           </a>
-        }
+        ) : undefined}
       />
 
       {/* ── Header info (siempre visible) ───────────────────────────────── */}

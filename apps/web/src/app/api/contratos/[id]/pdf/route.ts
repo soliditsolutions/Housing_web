@@ -43,6 +43,17 @@ export async function GET(
     // que el contrato existe a un Colaborador sin acceso a esa propiedad.
     return NextResponse.json({ error: "Contrato no encontrado." }, { status: 404 });
   }
+  if (contrato.estado !== "borrador") {
+    // Solo antes de activar: "vigente" significa que ya existe un contrato
+    // firmado de verdad fuera del sistema (activarContrato exige confirmar
+    // que ambas partes ya firmaron). No solo se oculta en la UI — se rechaza
+    // aquí también para que nadie pueda descargar un PDF "BORRADOR" que
+    // podría no coincidir con lo que realmente se firmó.
+    return NextResponse.json(
+      { error: "El borrador solo está disponible mientras el contrato no se ha activado." },
+      { status: 409 },
+    );
+  }
 
   const data: ContratoPdfData = {
     tenantNombre: actor.tenant.nombre,
