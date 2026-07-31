@@ -191,7 +191,7 @@ async function seedContrato(c: ContratoSeed) {
       diaVencimiento: c.diaVencimiento,
       comisionCorredorPct: c.comisionPct,
       reajuste: c.reajuste,
-      moraTasaPct: 1.5, moraDiasGracia: 5, multaMeses: 2,
+      moraTasaPct: 1.5, moraDiasGracia: 5,
       cobraGastoComun: c.cobraGastoComun,
       garantiaMeses: c.garantiaMeses,         // ADR-0009
       garantiaMontoCLP: c.garantiaMontoCLP,   // ADR-0009

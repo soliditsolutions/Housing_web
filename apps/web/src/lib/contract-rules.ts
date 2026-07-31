@@ -2,7 +2,7 @@
  * Motor de reglas determinístico para validación de contrato de arriendo (ADR-0012).
  *
  * Reemplaza la llamada a IA para los datos ESTRUCTURADOS del contrato: casi todo el
- * checklist legal (garantía, mora, plazo, multa, día, RUTs, coherencia) son reglas
+ * checklist legal (garantía, mora, plazo, día, RUTs, coherencia) son reglas
  * numéricas sobre datos que ya están en la BD — no necesitan un LLM. Este motor es
  * el **baseline siempre-on y local**: corre sin consentimiento y sin enviar nada
  * afuera. La IA externa (opt-in) solo agrega la prosa asesora sobre el texto de las
@@ -12,8 +12,11 @@
  * así que la renderiza igual. Explicable y auditable: cada alerta dice qué regla se
  * gatilló y qué dice la ley.
  *
- * Fuentes: Ley 18.101 (art. 46 garantía), interés máximo convencional (mora),
- * prácticas de mercado 2026.
+ * Fuentes verificadas contra el texto vigente de la Ley 18.101 (BCN, actualizado a
+ * jul-2026) — revisión legal 2026-07-30: la garantía NO tiene tope legal hoy (existe
+ * un proyecto de ley, Boletín 16.019-14/15.991-07, que lo propondría; aún no es ley);
+ * el Art. 21 sí exige reajuste UF de pagos y devoluciones en mora entre las partes.
+ * Interés máximo convencional (mora): Ley 18.010, no 18.101. Prácticas de mercado 2026.
  */
 import { validateRut } from "./rut";
 import type { ValidacionResultado, ValidacionEstado } from "@/app/api/contratos/[id]/validar/route";
@@ -27,7 +30,6 @@ export interface DatosContratoReglas {
   diaVencimiento:   number;
   garantiaMeses:    number;
   garantiaMontoCLP: number;
-  multaMeses:       number;
   moraTasaPct:      number;
   moraDiasGracia:   number;
   fechaInicio:      Date;
@@ -53,12 +55,14 @@ export function evaluarReglasContrato(d: DatosContratoReglas): ValidacionResulta
     }
   }
 
-  // ── Garantía: máximo 2 meses (art. 46 Ley 18.101) ────────────────────────────
+  // ── Garantía: sin tope legal vigente — Ley 18.101 no lo regula hoy (hay un
+  // proyecto de ley, Boletín 16.019-14/15.991-07, que lo propondría, todavía
+  // no aprobado). 1-2 meses es la práctica de mercado habitual, no un límite
+  // legal — nunca se marca como "ilegal" superarla.
   if (d.garantiaMeses > 2) {
-    const msg = `La garantía pactada (${d.garantiaMeses} meses) supera el máximo legal de 2 meses de renta (art. 46, Ley 18.101).`;
-    cumplimiento.push(msg); criticas.push(msg);
+    recomendaciones.push(`La garantía pactada (${d.garantiaMeses} meses) está por sobre la práctica de mercado habitual (1-2 meses). No hay un tope legal vigente en la Ley 18.101, pero un monto alto puede desalentar candidatos.`);
   } else if (d.garantiaMeses <= 0 && d.garantiaMontoCLP <= 0) {
-    recomendaciones.push("No se pactó garantía: el arrendador queda sin respaldo ante daños o incumplimientos. Podés incluir hasta 2 meses.");
+    recomendaciones.push("No se pactó garantía: el arrendador queda sin respaldo ante daños o incumplimientos. La práctica de mercado habitual es 1-2 meses.");
   }
 
   // ── Mora: tasa máxima ~1.5% mensual; días de gracia habitual 5–10 ────────────
@@ -81,13 +85,6 @@ export function evaluarReglasContrato(d: DatosContratoReglas): ValidacionResulta
   // ── Día de vencimiento: rango 1–28 ───────────────────────────────────────────
   if (d.diaVencimiento < 1 || d.diaVencimiento > 28) {
     estructura.push(`El día de vencimiento (${d.diaVencimiento}) está fuera del rango 1–28, lo que genera problemas en meses cortos como febrero.`);
-  }
-
-  // ── Multa por término anticipado: habitual 1–3 meses ─────────────────────────
-  if (d.multaMeses <= 0) {
-    recomendaciones.push("No se pactó multa por término anticipado: el arrendador queda sin cobertura si el arrendatario se retira antes.");
-  } else if (d.multaMeses > 3) {
-    montos.push(`La multa por término anticipado (${d.multaMeses} meses) está por sobre lo habitual (1 a 3 meses).`);
   }
 
   // ── Renta (montos, coherencia) ───────────────────────────────────────────────

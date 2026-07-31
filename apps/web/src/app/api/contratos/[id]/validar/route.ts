@@ -88,8 +88,8 @@ export function sanitizarCampo(valor: string | null): string {
 /**
  * POST — Validación de los datos ESTRUCTURADOS del contrato (ADR-0012).
  * Motor de reglas determinístico y LOCAL (`@/lib/contract-rules`) — sin IA, sin
- * enviar nada afuera. Reproduce el checklist legal (garantía art. 46, mora, plazo,
- * multa, día, RUTs, coherencia) sobre datos que ya están en la BD. El análisis de
+ * enviar nada afuera. Reproduce el checklist legal (garantía, mora, plazo,
+ * día, RUTs, coherencia) sobre datos que ya están en la BD. El análisis de
  * IA sobre el texto de cláusulas de un documento subido vive en `validar-doc`.
  */
 export async function POST(
@@ -128,7 +128,6 @@ export async function POST(
       diaVencimiento:   contrato.diaVencimiento,
       garantiaMeses:    Number(contrato.garantiaMeses),
       garantiaMontoCLP: Number(contrato.garantiaMontoCLP),
-      multaMeses:       Number(contrato.multaMeses),
       moraTasaPct:      Number(contrato.moraTasaPct),
       moraDiasGracia:   contrato.moraDiasGracia,
       fechaInicio:      contrato.fechaInicio,

@@ -410,7 +410,6 @@ async function getContratoDetalleTx(tx: TenantClient, tenantId: string, contrato
     valorArriendo: Number(contrato.valorArriendo),
     comisionCorredorPct: Number(contrato.comisionCorredorPct),
     moraTasaPct: Number(contrato.moraTasaPct),
-    multaMeses: Number(contrato.multaMeses),
     garantiaMeses: Number(contrato.garantiaMeses),
     garantiaMontoBase: contrato.garantiaMontoBase ? Number(contrato.garantiaMontoBase) : null,
     garantiaMontoCLP: Number(contrato.garantiaMontoCLP),

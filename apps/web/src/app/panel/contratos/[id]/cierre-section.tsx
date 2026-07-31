@@ -11,7 +11,10 @@ import { useToast } from "@/components/ui/toast";
 
 interface Props {
   contratoId:          string;
-  multaMeses:          number;
+  /** Fecha de término pactada del contrato — null si es de plazo indefinido.
+   * Se usa para calcular, solo informativamente, la renta del período que
+   * falta hasta esa fecha (ver mesesRestantes más abajo). */
+  fechaFin:            Date | null;
   valorArriendo:       number;
   denominacion:        string;  // "CLP" | "UF"
   /** Monto de garantía disponible HOY (ya revalorizado a la UF del día si la
@@ -25,9 +28,22 @@ interface Props {
   permitirTerminoNormal?: boolean;  // false = solo disponible en el último mes
 }
 
+/**
+ * Meses que faltan hasta fechaFin, redondeados hacia arriba (un día de sobra
+ * ya cuenta como un mes completo — igual criterio que un contrato real: no
+ * se prorratea al día). Puramente informativo, no se persiste ni se cobra.
+ */
+function mesesRestantes(fechaFin: Date): number {
+  const hoy    = new Date();
+  const hoyUTC = Date.UTC(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  const finUTC = Date.UTC(fechaFin.getFullYear(), fechaFin.getMonth(), fechaFin.getDate());
+  const diasRestantes = Math.ceil((finUTC - hoyUTC) / (1000 * 60 * 60 * 24));
+  return diasRestantes > 0 ? Math.ceil(diasRestantes / 30) : 0;
+}
+
 export function CierreSection({
   contratoId,
-  multaMeses,
+  fechaFin,
   valorArriendo,
   denominacion,
   garantiaDisponibleCLP,
@@ -44,12 +60,16 @@ export function CierreSection({
   );
   const [montoRetencion, setMontoRetencion] = useState(0);
 
-  /* Multa estimada (solo para UF usamos el valor nominal × UF, aquí lo mostramos
-     en la misma denominación del contrato como referencia informativa) */
-  const multaDisplay = multaMeses > 0
+  /* Renta del período faltante — informativa. La Ley 18.101 no regula el
+   * término anticipado por el arrendatario; lo habitual y más defendible
+   * legalmente (Código Civil, cláusula penal Art. 1535 y ss. + Art. 1489)
+   * es que deba las rentas del período que falta, no un monto fijo arbitrario
+   * — igual criterio que usan los contratos de arriendo reales en Chile. */
+  const meses = fechaFin ? mesesRestantes(fechaFin) : 0;
+  const rentaPeriodoFaltanteDisplay = meses > 0
     ? denominacion === "UF"
-      ? `${multaMeses * valorArriendo} UF aprox.`
-      : clp(multaMeses * valorArriendo)
+      ? `${meses * valorArriendo} UF aprox.`
+      : clp(meses * valorArriendo)
     : null;
 
   function handleTerminar() {
@@ -131,20 +151,32 @@ export function CierreSection({
           </div>
         </fieldset>
 
-        {/* Aviso multa (solo anticipado y si hay multa) */}
-        {tipo === "anticipado" && multaDisplay && (
+        {/* Aviso renta del período faltante (solo anticipado, informativo) */}
+        {tipo === "anticipado" && rentaPeriodoFaltanteDisplay && (
           <div
             className="flex items-start gap-3 rounded-xl px-4 py-3"
             style={{ background: "var(--hw-warning-lt)", border: "1px solid var(--hw-warning-bd)" }}
           >
             <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" style={{ color: "var(--hw-warning-dk)" }} aria-hidden="true" />
             <div className="text-xs" style={{ color: "var(--hw-warning-dk)" }}>
-              <p className="font-semibold">Multa por término anticipado (informativa)</p>
+              <p className="font-semibold">Renta del período faltante (informativa)</p>
               <p className="mt-0.5">
-                Según el contrato ({multaMeses} mes(es) de multa): <strong>{multaDisplay}</strong>.
-                El cobro de la multa se gestiona fuera del sistema.
+                Quedan {meses} mes(es) hasta el término pactado: <strong>{rentaPeriodoFaltanteDisplay}</strong>.
+                Es habitual pactar que el arrendatario deba las rentas del período que falta
+                (Art. 1489 Código Civil) cuando pone término anticipado. El cobro se gestiona fuera del sistema.
               </p>
             </div>
+          </div>
+        )}
+        {tipo === "anticipado" && !fechaFin && (
+          <div
+            className="flex items-start gap-3 rounded-xl px-4 py-3"
+            style={{ background: "var(--hw-warning-lt)", border: "1px solid var(--hw-warning-bd)" }}
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" style={{ color: "var(--hw-warning-dk)" }} aria-hidden="true" />
+            <p className="text-xs" style={{ color: "var(--hw-warning-dk)" }}>
+              Este contrato es de plazo indefinido: no aplica el cálculo de renta del período faltante.
+            </p>
           </div>
         )}
 
@@ -208,7 +240,7 @@ export function CierreSection({
             </div>
 
             <p className="text-[11px]" style={{ color: "var(--hw-danger-dk)", opacity: 0.8 }}>
-              Ambos montos quedarán registrados en el ledger inmutable del contrato (Ley 18.101 · tope legal 2 rentas).
+              Ambos montos quedarán registrados en el ledger inmutable del contrato.
             </p>
           </div>
         )}

@@ -145,6 +145,9 @@ export async function terminarContrato(
       // Diferencia UF entre lo recibido y lo que se restituye hoy. La aporta
       // (o descuenta) el propietario. Sin este asiento, v_garantia_retenida no
       // cerraría a cero para una garantía UF (recibida ≠ retención+devolución).
+      // Base legal: Art. 21, Ley 18.101 — exige reajustar por UF los pagos y
+      // devoluciones en mora entre las partes de todo contrato de arriendo
+      // (verificado contra el texto vigente de la ley, revisión 2026-07-30).
       const reajusteCLP = garantiaCLP - garantiaSnapshotCLP;
 
       const nuevoEstado = opts.tipo === "anticipado" ? "terminado_anticipado" : "terminado";

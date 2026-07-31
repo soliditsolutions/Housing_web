@@ -58,7 +58,6 @@ type WizardData = {
   garantiaDenominacion: "UF" | "CLP";
   /** Monto de garantía en la denominación elegida (nº de UF, o pesos). */
   garantiaMonto: string;
-  multaMeses: string;
 };
 
 const INITIAL: WizardData = {
@@ -70,7 +69,7 @@ const INITIAL: WizardData = {
   moraTasaPct: "3", moraDiasGracia: "5",
   cobraGastoComun: false, montoGastoComun: "",
   fechaInicio: "", tipoVigencia: "indefinido", fechaFin: "",
-  garantiaMeses: "0", garantiaDenominacion: "UF", garantiaMonto: "", multaMeses: "1",
+  garantiaMeses: "0", garantiaDenominacion: "UF", garantiaMonto: "",
 };
 
 const TIPO_LABEL: Record<string, string> = {
@@ -733,7 +732,7 @@ function Step4({
         )}
 
         {/* Garantía */}
-        <FieldRow label="Meses de garantía" hint="Máximo 2 meses según la Ley de Arrendamiento">
+        <FieldRow label="Meses de garantía" hint="Hasta 2 meses — práctica de mercado recomendada">
           <div className="flex gap-2">
             {(["0", "1", "2"] as const).map((m) => (
               <button
@@ -799,19 +798,6 @@ function Step4({
             </div>
           </FieldRow>
         )}
-
-        {/* Multa */}
-        <FieldRow label="Multa por término anticipado (meses de arriendo)">
-          <TextInput
-            type="number"
-            inputMode="numeric"
-            value={data.multaMeses}
-            onChange={(e) => set("multaMeses", e.target.value)}
-            placeholder="1"
-            min="0"
-            max="12"
-          />
-        </FieldRow>
 
         {/* Vista previa del calendario */}
         {preview.length > 0 && (
@@ -1013,8 +999,6 @@ export function NuevoContratoClient({ propiedades }: { propiedades: PropiedadIte
         garantiaMonto:     parseInt(data.garantiaMeses, 10) > 0
           ? parseFloat(data.garantiaMonto)
           : 0,
-        // UI2: || 1 convertía 0 (sin multa) a 1; usar isFinite para preservar el 0
-        multaMeses:        Number.isFinite(parseFloat(data.multaMeses)) ? parseFloat(data.multaMeses) : 1,
         fechaInicio:       data.fechaInicio,
         fechaFin:          data.tipoVigencia === "fijo" ? data.fechaFin : undefined,
       });

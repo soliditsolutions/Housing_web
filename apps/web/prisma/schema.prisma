@@ -397,10 +397,11 @@ model Contrato {
   reajuste            FrecuenciaReajuste @default(anual)
   moraTasaPct         Decimal            @default(0) @map("mora_tasa_pct") @db.Decimal(5, 2)
   moraDiasGracia      Int                @default(0) @map("mora_dias_gracia") @db.SmallInt
-  multaMeses          Decimal            @default(0) @map("multa_meses") @db.Decimal(4, 2)
   cobraGastoComun     Boolean            @default(false) @map("cobra_gasto_comun")
-  // Garantía (ADR-0009) — tope legal 2 rentas.
-  //  · garantiaMeses:     nº de rentas pactadas como garantía (0–2), tope legal.
+  // Garantía (ADR-0009). La Ley 18.101 no fija un tope legal vigente para el
+  // monto (revisión legal 2026-07-30 — ver contract-rules.ts); el rango 0-2
+  // que aceptan las validaciones es práctica de mercado, no límite legal.
+  //  · garantiaMeses:     nº de rentas pactadas como garantía (0–2 en la UI).
   //  · garantiaDenominacion + garantiaMontoBase: el monto PACTADO en su unidad
   //    (2 UF, o $760.000). Análogo a denominacion + valorArriendo del arriendo.
   //  · garantiaMontoCLP:  SNAPSHOT en pesos de lo recibido, a la UF del día de

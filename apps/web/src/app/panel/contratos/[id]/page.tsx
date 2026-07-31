@@ -239,7 +239,7 @@ export default async function ContratoDetallePage({
           {detalle.estado === "vigente" && (
             <CierreSection
               contratoId={detalle.id}
-              multaMeses={detalle.multaMeses}
+              fechaFin={detalle.fechaFin}
               valorArriendo={detalle.valorArriendo}
               denominacion={detalle.denominacion}
               garantiaDisponibleCLP={detalle.garantiaDisponibleCLP}
@@ -265,7 +265,7 @@ export default async function ContratoDetallePage({
                     <span className="font-medium text-[var(--hw-text-2)]">{clp(detalle.garantiaRetenidaCLP)}</span>
                   </p>
                 </div>
-                <p className="text-xs text-[var(--hw-text-4)]">Tope legal: 2 rentas (Ley 18.101)</p>
+                <p className="text-xs text-[var(--hw-text-4)]">Hasta 2 rentas — práctica de mercado recomendada</p>
               </div>
             </Card>
           )}

@@ -1,7 +1,13 @@
 /**
  * Tests del motor de reglas determinístico del contrato (ADR-0012, tarea #68).
- * Cubre cada regla del checklist legal (garantía art. 46, mora/usura, plazo,
- * multa, día de vencimiento, RUTs, coherencia) y la derivación de estado.
+ * Cubre cada regla del checklist legal (garantía, mora/usura, plazo, día de
+ * vencimiento, RUTs, coherencia) y la derivación de estado.
+ *
+ * Revisión legal 2026-07-30: la garantía ya NO se valida contra un tope legal
+ * inexistente ("art. 46 Ley 18.101" no existe — la ley tiene 27 artículos y no
+ * regula el monto de la garantía hoy). Superar 1-2 meses ahora es solo una
+ * recomendación de práctica de mercado, nunca una crítica. El campo multaMeses
+ * fue eliminado del todo (no correspondía a ninguna cláusula real).
  */
 import { describe, it, expect } from "vitest";
 import { evaluarReglasContrato, type DatosContratoReglas } from "../contract-rules";
@@ -15,7 +21,6 @@ const BASE: DatosContratoReglas = {
   diaVencimiento:   5,
   garantiaMeses:    1,
   garantiaMontoCLP: 450000,
-  multaMeses:       2,
   moraTasaPct:      1,
   moraDiasGracia:   7,
   fechaInicio:      new Date("2026-01-01"),
@@ -34,12 +39,14 @@ describe("evaluarReglasContrato() — caso aprobado", () => {
   });
 });
 
-describe("evaluarReglasContrato() — garantía (art. 46)", () => {
-  it("garantía > 2 meses → crítica + requiere_revision", () => {
+describe("evaluarReglasContrato() — garantía (sin tope legal vigente)", () => {
+  it("garantía > 2 meses → solo recomendación, nunca crítica ni cita un artículo inexistente", () => {
     const r = con({ garantiaMeses: 3 });
-    expect(r.estado).toBe("requiere_revision");
-    expect(r.alertas_criticas.some((a) => /art\. 46/.test(a))).toBe(true);
-    expect(r.categorias.cumplimiento_legal.ok).toBe(false);
+    expect(r.estado).toBe("con_alertas");
+    expect(r.alertas_criticas).toEqual([]);
+    expect(r.categorias.cumplimiento_legal.ok).toBe(true);
+    expect(r.recomendaciones.some((a) => /práctica de mercado/i.test(a))).toBe(true);
+    expect(r.recomendaciones.some((a) => /art\. 46|artículo 46/i.test(a))).toBe(false);
   });
 
   it("sin garantía → recomendación (no crítica)", () => {
@@ -96,18 +103,6 @@ describe("evaluarReglasContrato() — día de vencimiento", () => {
   });
 });
 
-describe("evaluarReglasContrato() — multa", () => {
-  it("sin multa → recomendación", () => {
-    expect(con({ multaMeses: 0 }).recomendaciones.some((a) => /multa/i.test(a))).toBe(true);
-  });
-
-  it("multa > 3 meses → alerta de montos", () => {
-    const r = con({ multaMeses: 4 });
-    expect(r.categorias.montos.ok).toBe(false);
-    expect(r.estado).toBe("con_alertas");
-  });
-});
-
 describe("evaluarReglasContrato() — información de las partes (RUTs)", () => {
   it("RUT faltante → crítica", () => {
     const r = con({ arrendatarioRut: null });
@@ -137,7 +132,10 @@ describe("evaluarReglasContrato() — derivación de estado y forma de salida", 
   });
 
   it("acumula múltiples críticas", () => {
-    const r = con({ garantiaMeses: 5, moraTasaPct: 3, arrendatarioRut: null, valorArriendo: 0 });
+    const r = con({
+      moraTasaPct: 3, arrendatarioRut: null, valorArriendo: 0,
+      fechaInicio: new Date("2026-06-01"), fechaFin: new Date("2026-01-01"),
+    });
     expect(r.estado).toBe("requiere_revision");
     expect(r.alertas_criticas.length).toBeGreaterThanOrEqual(4);
   });

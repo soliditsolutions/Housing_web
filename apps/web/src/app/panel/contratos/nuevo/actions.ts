@@ -74,7 +74,6 @@ export interface DatosContrato {
   /** Monto de garantía en su denominación (nº de UF, o pesos). El asiento
    * contable se registra en CLP: si es UF se convierte con la UF del inicio. */
   garantiaMonto:        number;
-  multaMeses:        number;
   fechaInicio:       string;    // "YYYY-MM-DD"
   /** Omitir para indefinido (se generan 12 períodos). */
   fechaFin?:         string;    // "YYYY-MM-DD"
@@ -104,10 +103,7 @@ export async function crearContrato(data: DatosContrato): Promise<ResultadoContr
     return { ok: false, error: "Días de gracia deben ser un entero entre 0 y 30." };
   // V1: garantiaMeses requiere entero (flotante 1.5 pasaba el check anterior)
   if (!Number.isInteger(data.garantiaMeses) || data.garantiaMeses < 0 || data.garantiaMeses > 2)
-    return { ok: false, error: "Garantía debe ser 0, 1 o 2 meses (límite legal)." };
-  // V2: multaMeses no tenía ninguna validación
-  if (!Number.isFinite(data.multaMeses) || data.multaMeses < 0)
-    return { ok: false, error: "Meses de multa inválidos (debe ser ≥ 0)." };
+    return { ok: false, error: "Garantía debe ser 0, 1 o 2 meses." };
   // V3: montoGastoComun cuando se cobra
   if (data.cobraGastoComun && (!Number.isFinite(data.montoGastoComun) || data.montoGastoComun <= 0))
     return { ok: false, error: "El monto de gasto común debe ser mayor que cero." };
@@ -263,7 +259,6 @@ export async function crearContrato(data: DatosContrato): Promise<ResultadoContr
           garantiaDenominacion: data.garantiaMeses > 0 ? data.garantiaDenominacion : null,
           garantiaMontoBase:    data.garantiaMeses > 0 ? data.garantiaMonto : null,
           garantiaMontoCLP,
-          multaMeses:     data.multaMeses,
           fechaInicio,
           fechaFin:       fechaFinDB,
         },
