@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, FileText, ShieldCheck, AlertTriangle } from "lucide-react";
+import { ArrowLeft, FileText, ShieldCheck, AlertTriangle, Download } from "lucide-react";
 import { getActor, getContratoDetalle } from "@/lib/queries";
 import { clp, num, fecha } from "@/lib/format";
 import { Badge, Card, estadoTone, estadoPulse, estadoLabel, PageTitle } from "@/components/panel/ui";
@@ -120,6 +120,19 @@ export default async function ContratoDetallePage({
       <PageTitle
         title={detalle.propiedad.direccion}
         subtitle={[detalle.propiedad.comuna, detalle.propiedad.tipo].filter(Boolean).join(" · ")}
+        action={
+          <a
+            href={`/api/contratos/${detalle.id}/pdf`}
+            className="hw-btn inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold"
+            style={{
+              background: "var(--hw-surface-2)", color: "var(--hw-text-2)",
+              border: "1px solid var(--hw-border-2)",
+            }}
+          >
+            <Download className="h-3.5 w-3.5" aria-hidden="true" />
+            Descargar borrador (PDF)
+          </a>
+        }
       />
 
       {/* ── Header info (siempre visible) ───────────────────────────────── */}

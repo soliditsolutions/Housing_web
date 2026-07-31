@@ -2,7 +2,9 @@
 
 > Checklist que actualizamos en cada etapa. `[x]` hecho · `[~]` en curso · `[ ]` pendiente.
 
-_Última actualización: 2026-07-28 — Cuentas multi-usuario (Manager/Collaborator, ADR-0013) Fase A completa: rename de rol, `getActor()`, schema de invitación/auditoría/desactivación. Dos hallazgos de seguridad encontrados y corregidos en el mismo trabajo (RUT editable sin re-verificación en Mi perfil; crash en vez de expulsión limpia al desactivar un usuario con sesión activa). Detalle al final._
+_Última actualización: 2026-07-30 — Cuentas multi-usuario Fases B-E completas (ver ADR-0013); revisión legal de las cláusulas de contrato contra la Ley 18.101 vigente y un contrato de arriendo real de referencia — se encontró y corrigió una cita legal fabricada ("art. 46, Ley 18.101" no existe) presente en 6 lugares del código/UI, y se rediseñó el término anticipado (renta del período faltante, Art. 1489 CC, en vez de una "multa" fija sin respaldo legal ni real — ver ADR-0009). **Ítem 9 completo**: borrador de contrato de arriendo descargable en PDF (plantilla fija + datos reales, sin redacción libre de IA — ver detalle abajo). Detalle en Etapa 6 al final._
+
+_Actualización anterior: 2026-07-28 — Cuentas multi-usuario (Manager/Collaborator, ADR-0013) Fase A completa: rename de rol, `getActor()`, schema de invitación/auditoría/desactivación. Dos hallazgos de seguridad encontrados y corregidos en el mismo trabajo (RUT editable sin re-verificación en Mi perfil; crash en vez de expulsión limpia al desactivar un usuario con sesión activa). Detalle al final._
 
 _Actualización anterior: 2026-07-27 — Ítem 2 (garantía UF/CLP) e Ítem 10 (estadísticas por plan) completos; Aurora tema dual extendido al sidebar del panel (antes era navy fijo en ambos temas — ver Etapa 6); UI/UX Pro Max (5 partes) + auditoría de accesibilidad (etapas 1-4) completas. Detalle en Etapa 6 al final._
 
@@ -241,6 +243,16 @@ Sistema de analítica con 3 niveles de acceso por plan del corredor (básica/med
   - Períodos `atrasado` huérfanos de contratos ya terminados inflaban la proyección de ingresos (~2x en un mes). Fix: `getProyeccionesRiesgo` exige `contrato.estado: "vigente"` en `periodosFuturos` (deliberadamente NO aplicado a las queries de morosidad histórica, que sí deben reflejar toda la deuda sin importar el estado actual del contrato).
   - `MiniDonut` (gráfico de dona) colapsaba a 0×0 dentro de una fila flex sin ancho propio — `ResponsiveContainer width="100%"` no tenía de dónde medir. Fix: `width: height` fijo + `shrink-0`.
 - [x] **Bug de concurrencia en `pg`** encontrado durante la verificación (ver `BRAIN.md` §6): `getUfCLP` (cliente Prisma global) llamado desde dentro de `withTenant` en 8 sitios (incluidas las 6 funciones nuevas de este ítem) disparaba una query fuera de la transacción activa. Fix: `getUfCLPTx(tx, fecha)`.
+
+### Ítem 9 — Borrador de contrato de arriendo en PDF — completo (2026-07-30)
+Antes bloqueado ("requiere definición") por la duda de qué tan "legal" debía ser el resultado. Definición confirmada con el usuario: el generador produce un **borrador de trabajo** — el flujo real siempre pasa por revisión y legalización de un abogado antes de firmarse, así que el estándar es realismo y ausencia de citas legales falsas, no certificación legal (ver ADR-0009, sección "Revisión legal").
+
+- [x] **Plantilla fija + datos reales** (`lib/contrato-pdf.tsx`, `@react-pdf/renderer`) — sin redacción libre de IA (decisión confirmada con el usuario): la estructura de cláusulas sigue el mismo criterio que un contrato de arriendo real usado como referencia, parafraseada (no copiada textual), rellenada con los datos del `Contrato`/`Persona`/`Propiedad` en BD.
+- [x] Correcciones deliberadas respecto al contrato de referencia: término anticipado = renta del período faltante (Art. 1489 CC), no una multa fija; espacio para firma manuscrita, sin mencionar un proveedor de firma electrónica que Housing no tiene integrado; protección de datos actualizada a Ley 21.719 (la vigente).
+- [x] Datos que el sistema no captura (domicilio de las partes, estado civil, inscripción CBR) se dejan como placeholder entre corchetes en el propio PDF — nunca se inventan.
+- [x] Ruta `GET /api/contratos/[id]/pdf` — mismo guard de ownership que el resto de `/panel/contratos` (ADR-0013 Fase D: 404, no 403, para un Colaborador sin acceso a la propiedad). Botón "Descargar borrador (PDF)" en el detalle del contrato.
+- [x] **Bug encontrado y corregido durante la verificación**: si el contrato no tenía garantía pactada, la cláusula NOVENO se omitía por completo y la numeración saltaba de OCTAVO a DÉCIMO — un vacío que se lee como un error en un documento legal real. Corregido para que la cláusula siempre esté presente, con texto distinto según haya o no garantía.
+- [x] Verificado generando PDFs reales con los 3 caminos condicionales de la plantilla (con garantía, sin garantía, plazo fijo/indefinido) + prueba end-to-end en navegador (200 OK con sesión real). 5 tests nuevos (guard de ownership), `tsc` limpio, 348 tests en verde.
 
 ### UI/UX Pro Max — auditoría y rediseño integral (5 partes) — completo
 Auditoría de las 5 superficies del producto (Home público, Marketplace + ficha, Autenticación, Portal de autoconsulta, Panel corredor) contra checklist de accesibilidad/UX, seguida de una implementación por etapas:
